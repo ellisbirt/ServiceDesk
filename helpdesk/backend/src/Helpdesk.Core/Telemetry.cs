@@ -32,26 +32,7 @@ public static class Telemetry
     public static readonly Counter<long> Redactions =
         Meter.CreateCounter<long>("helpdesk.redactions", description: "Sensitive values removed before leaving the service.");
 
-    public static readonly Counter<long> UpstreamRateLimited =
-        Meter.CreateCounter<long>("helpdesk.anthropic.rate_limited", description: "HTTP 429 responses from the model API.");
-
-    public static readonly Histogram<double> UpstreamRateLimitWait =
-        Meter.CreateHistogram<double>("helpdesk.anthropic.rate_limit.wait", unit: "s", description: "Seconds waited out after a 429.");
-
-    public static readonly Counter<long> AnthropicInputTokens =
-        Meter.CreateCounter<long>("helpdesk.anthropic.input_tokens", description: "Uncached Anthropic input tokens.");
-
-    public static readonly Counter<long> AnthropicOutputTokens =
-        Meter.CreateCounter<long>("helpdesk.anthropic.output_tokens", description: "Anthropic output tokens.");
-
-    public static readonly Counter<long> AnthropicCacheWriteTokens =
-        Meter.CreateCounter<long>("helpdesk.anthropic.cache_write_tokens", description: "Anthropic cache-write input tokens.");
-
-    public static readonly Counter<long> AnthropicCacheReadTokens =
-        Meter.CreateCounter<long>("helpdesk.anthropic.cache_read_tokens", description: "Anthropic cache-read input tokens.");
-
-    public static readonly Histogram<double> AnthropicEstimatedCost =
-        Meter.CreateHistogram<double>("helpdesk.anthropic.estimated_cost", unit: "USD", description: "Estimated Anthropic cost per API operation.");
+    // Model call metrics (tokens, cost, 429s) live in Helpdesk.Llm.LlmTelemetry under the "Helpdesk.Llm" meter.
 
     /// <summary>Tag: <c>reason</c>. Requests whose history had messages the server could not trust.</summary>
     public static readonly Counter<long> HistoryVerificationFailures =

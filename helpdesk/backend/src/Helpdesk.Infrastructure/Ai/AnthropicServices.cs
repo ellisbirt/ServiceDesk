@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Helpdesk.Core;
 using Helpdesk.Infrastructure.Search;
@@ -31,37 +31,30 @@ internal static class PromptInput
 }
 
 public sealed class AnthropicGuardrailRouterService(
-    IAnthropicClient client,
+    IChatProvider client,
     IOptions<AnthropicOptions> options,
     ILogger<AnthropicGuardrailRouterService> logger) : IGuardrailRouterService
 {
     private readonly AnthropicOptions _options = options.Value;
-    private static readonly JsonObject ClassifierOutputConfig = new()
+    private static readonly JsonObject ClassifierSchema = new()
     {
-        ["format"] = new JsonObject
+        ["type"] = "object",
+        ["properties"] = new JsonObject
         {
-            ["type"] = "json_schema",
-            ["schema"] = new JsonObject
+            ["lane"] = new JsonObject
             {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
-                {
-                    ["lane"] = new JsonObject
-                    {
-                        ["type"] = "string",
-                        ["enum"] = new JsonArray(
-                            ActionLanes.PolicyViolation,
-                            ActionLanes.PublicTech,
-                            ActionLanes.PublicSearch,
-                            ActionLanes.PrivateCorp,
-                            ActionLanes.NoMatch)
-                    },
-                    ["reasoning"] = new JsonObject { ["type"] = "string" }
-                },
-                ["required"] = new JsonArray("lane", "reasoning"),
-                ["additionalProperties"] = false
-            }
-        }
+                ["type"] = "string",
+                ["enum"] = new JsonArray(
+                    ActionLanes.PolicyViolation,
+                    ActionLanes.PublicTech,
+                    ActionLanes.PublicSearch,
+                    ActionLanes.PrivateCorp,
+                    ActionLanes.NoMatch)
+            },
+            ["reasoning"] = new JsonObject { ["type"] = "string" }
+        },
+        ["required"] = new JsonArray("lane", "reasoning"),
+        ["additionalProperties"] = false
     };
 
     public async Task<(string Lane, string ResponseContext)> ClassifyAndValidateAsync(
@@ -89,8 +82,10 @@ public sealed class AnthropicGuardrailRouterService(
         try
         {
             var coaching = await client.CompleteAsync(
-                Prompts.ComplianceCoach, PromptInput.WithUserAgent(PromptInput.Wrap("user_query", userInput), userAgent),
-                _options.CoachTemperature, _options.InferenceMaxTokens, cancellationToken: cancellationToken, progress: progress);
+                new ChatRequest(
+                    Prompts.ComplianceCoach, PromptInput.WithUserAgent(PromptInput.Wrap("user_query", userInput), userAgent),
+                    _options.CoachTemperature, _options.InferenceMaxTokens),
+                progress, cancellationToken);
             return (lane, coaching.Trim());
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -109,12 +104,13 @@ public sealed class AnthropicGuardrailRouterService(
         try
         {
             raw = await client.CompleteAsync(
-                Prompts.GuardrailRouter,
-                PromptInput.WithUserAgent(
-                    $"{PromptInput.Wrap("conversation_history", JsonSerializer.Serialize(conversationHistory))}\n\n{PromptInput.Wrap("user_query", userInput)}",
-                    userAgent),
-                temperature: 0.0, _options.RouterMaxTokens,
-                cancellationToken: ct, outputConfig: ClassifierOutputConfig, progress: progress);
+                new ChatRequest(
+                    Prompts.GuardrailRouter,
+                    PromptInput.WithUserAgent(
+                        $"{PromptInput.Wrap("conversation_history", JsonSerializer.Serialize(conversationHistory))}\n\n{PromptInput.Wrap("user_query", userInput)}",
+                        userAgent),
+                    0.0, _options.RouterMaxTokens, ResponseSchema: ClassifierSchema),
+                progress, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -155,10 +151,12 @@ public sealed class AnthropicGuardrailRouterService(
 }
 
 public sealed class AnthropicPublicInferenceService(
-    IAnthropicClient client, IOptions<AnthropicOptions> options, IOptions<SearchOptions> searchOptions) : IPublicInferenceService
+    IChatProvider client, IOptions<AnthropicOptions> options, IOptions<SearchOptions> searchOptions) : IPublicInferenceService
 {
     private readonly AnthropicOptions _options = options.Value;
-    private readonly bool _nativeSearch = SearchProviderCatalog.IsNativeClaude(searchOptions.Value.Provider);
+    // Native search needs a provider with server-side tools (Anthropic); validation reports a mismatch at startup.
+    private readonly bool _nativeSearch = SearchProviderCatalog.IsNativeClaude(searchOptions.Value.Provider)
+        && client.Capabilities.HasFlag(LlmCapabilities.ServerTools);
 
     public Task<string> ExecutePublicInferenceAsync(
         string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null,
@@ -197,6 +195,9 @@ public sealed class AnthropicPublicInferenceService(
     private Task<string> ReplyAsync(
         string system, string user, JsonArray? tools, IChatProgress? progress, CancellationToken ct) =>
         progress is null
-            ? client.CompleteAsync(system, user, _options.InferenceTemperature, _options.InferenceMaxTokens, tools, ct)
-            : client.StreamAsync(system, user, _options.InferenceTemperature, _options.InferenceMaxTokens, progress, tools, ct);
+            ? client.CompleteAsync(Request(system, user, tools), cancellationToken: ct)
+            : client.StreamAsync(Request(system, user, tools), progress, ct);
+
+    private ChatRequest Request(string system, string user, JsonArray? tools) =>
+        new(system, user, _options.InferenceTemperature, _options.InferenceMaxTokens, Tools: tools);
 }

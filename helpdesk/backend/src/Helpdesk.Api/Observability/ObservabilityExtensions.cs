@@ -49,10 +49,12 @@ public static class ObservabilityExtensions
             .ConfigureResource(r => r.AddService(ServiceName, serviceVersion: typeof(ObservabilityExtensions).Assembly.GetName().Version?.ToString()))
             .WithTracing(t => t
                 .AddSource(Telemetry.Name)
+                .AddSource(LlmTelemetry.Name)
                 .AddAspNetCoreInstrumentation(o => o.Filter = ctx => ctx.Request.Path != "/healthz")
                 .AddHttpClientInstrumentation())
             .WithMetrics(m => m
                 .AddMeter(Telemetry.Name)
+                .AddMeter(LlmTelemetry.Name)
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation());

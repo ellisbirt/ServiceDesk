@@ -45,9 +45,7 @@ public class AnthropicRateLimitTests
         Content = new StringContent("""{"stop_reason":"end_turn","content":[{"type":"text","text":"hi"}]}""", Encoding.UTF8, "application/json")
     };
 
-    private static AnthropicClient Client(HttpMessageHandler h, AnthropicOptions? o = null) =>
-        new(new HttpClient(h) { BaseAddress = new Uri("https://example.test/") },
-            Options.Create(o ?? new AnthropicOptions { Model = "m" }), NullLogger<AnthropicClient>.Instance);
+    private static TestAnthropic Client(HttpMessageHandler h, AnthropicOptions? o = null) => new(h, o);
 
     [Fact]
     public async Task Retries_AfterRetryAfterHeader_AndReportsTheWait()
@@ -159,9 +157,7 @@ public class AnthropicStreamingTests
     private static (string, string) BlockStop(int i) =>
         ("content_block_stop", $$"""{"type":"content_block_stop","index":{{i}}}""");
 
-    private static AnthropicClient Client(HttpMessageHandler h, AnthropicOptions? o = null) =>
-        new(new HttpClient(h) { BaseAddress = new Uri("https://example.test/") },
-            Options.Create(o ?? new AnthropicOptions { Model = "m" }), NullLogger<AnthropicClient>.Instance);
+    private static TestAnthropic Client(HttpMessageHandler h, AnthropicOptions? o = null) => new(h, o);
 
     private static readonly JsonArray Tools = new(new JsonObject { ["type"] = "web_search_20260318", ["name"] = "web_search" });
 
@@ -186,7 +182,7 @@ public class AnthropicStreamingTests
         var stopped = new List<Activity>();
         using var listener = new ActivityListener
         {
-            ShouldListenTo = source => source.Name == Telemetry.Name,
+            ShouldListenTo = source => source.Name == Telemetry.Name || source.Name == LlmTelemetry.Name,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             ActivityStopped = activity =>
             {

@@ -6,6 +6,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Using Include="Helpdesk.Llm" />
+  </ItemGroup>
+
+  <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 

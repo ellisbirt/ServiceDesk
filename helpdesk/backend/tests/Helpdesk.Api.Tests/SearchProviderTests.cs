@@ -198,9 +198,8 @@ public class ClaudeNativeSearchTests
         }
     }
 
-    private static AnthropicClient Client(QueueHandler h, string model = "m") =>
-        new(new HttpClient(h) { BaseAddress = new Uri("https://example.test/") },
-            Options.Create(new AnthropicOptions { Model = model }), NullLogger<AnthropicClient>.Instance);
+    private static TestAnthropic Client(QueueHandler h, string model = "m") =>
+        new(h, new AnthropicOptions { Model = model });
 
     private static readonly JsonArray Tools = new(new JsonObject { ["type"] = "web_search_20260318", ["name"] = "web_search" });
 
@@ -268,26 +267,29 @@ public class ClaudeNativeSearchTests
         Assert.Equal(4, h.Requests.Count);
     }
 
-    private sealed class RecordingClient : IAnthropicClient
+    private sealed class RecordingClient : IChatProvider
     {
         public string? System { get; private set; }
         public string? User { get; private set; }
         public JsonArray? ToolsSent { get; private set; }
-        public JsonObject? OutputConfigSent { get; private set; }
-        public Task<string> CompleteAsync(
-            string systemPrompt, string userContent, double temperature, int maxTokens,
-            JsonArray? tools = null, CancellationToken ct = default, JsonObject? outputConfig = null, IChatProgress? progress = null)
+        public JsonObject? ResponseSchemaSent { get; private set; }
+        public bool Streamed { get; private set; }
+
+        public string Provider => LlmProviders.Anthropic;
+        public string Model => "m";
+        public LlmCapabilities Capabilities =>
+            LlmCapabilities.Streaming | LlmCapabilities.StructuredOutput | LlmCapabilities.ServerTools;
+
+        public Task<string> CompleteAsync(ChatRequest request, ILlmProgress? progress = null, CancellationToken cancellationToken = default)
         {
-            (System, User, ToolsSent, OutputConfigSent) = (systemPrompt, userContent, tools, outputConfig);
+            (System, User, ToolsSent, ResponseSchemaSent) = (request.SystemPrompt, request.UserContent, request.Tools, request.ResponseSchema);
             return Task.FromResult("ok");
         }
 
-        public bool Streamed { get; private set; }
-
-        public Task<string> StreamAsync(string systemPrompt, string userContent, double temperature, int maxTokens, IChatProgress progress, JsonArray? tools = null, CancellationToken ct = default)
+        public Task<string> StreamAsync(ChatRequest request, ILlmProgress progress, CancellationToken cancellationToken = default)
         {
             Streamed = true;
-            (System, User, ToolsSent) = (systemPrompt, userContent, tools);
+            (System, User, ToolsSent) = (request.SystemPrompt, request.UserContent, request.Tools);
             return Task.FromResult("ok");
         }
     }

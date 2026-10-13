@@ -86,18 +86,4 @@ public class GuardrailClassificationException(string message, Exception? inner =
 /// Receives incremental progress while a chat request is processed asynchronously (SignalR).
 /// Implementations must not throw for transient delivery problems; progress is best effort.
 /// </summary>
-public interface IChatProgress
-{
-    /// <summary>A fragment of the assistant's reply, in order.</summary>
-    ValueTask OnTextAsync(string delta, CancellationToken cancellationToken);
-
-    /// <summary>The upstream model asked us to wait (HTTP 429 Retry-After) before the call is retried.</summary>
-    ValueTask OnRateLimitedAsync(TimeSpan retryAfter, int attempt, CancellationToken cancellationToken);
-}
-
-/// <summary>The upstream model rate limited the request and the allowed waiting budget is exhausted.</summary>
-public class UpstreamRateLimitedException(TimeSpan? retryAfter, string message, Exception? inner = null)
-    : Exception(message, inner)
-{
-    public TimeSpan? RetryAfter { get; } = retryAfter;
-}
+public interface IChatProgress : Helpdesk.Llm.ILlmProgress;

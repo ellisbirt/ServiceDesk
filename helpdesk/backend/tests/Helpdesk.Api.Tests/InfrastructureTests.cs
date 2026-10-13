@@ -12,31 +12,9 @@ namespace Helpdesk.Api.Tests;
 
 public class GuardrailRouterTests
 {
-    private sealed class ScriptedClient(Func<string, string> reply) : IAnthropicClient
-    {
-        public List<string> SystemPrompts { get; } = [];
-        public List<string> UserContents { get; } = [];
-        public List<System.Text.Json.Nodes.JsonObject?> OutputConfigs { get; } = [];
-        public Task<string> CompleteAsync(
-            string systemPrompt, string userContent, double temperature, int maxTokens,
-            System.Text.Json.Nodes.JsonArray? tools = null, CancellationToken ct = default,
-            System.Text.Json.Nodes.JsonObject? outputConfig = null, IChatProgress? progress = null)
-        {
-            SystemPrompts.Add(systemPrompt);
-            UserContents.Add(userContent);
-            OutputConfigs.Add(outputConfig);
-            return Task.FromResult(reply(systemPrompt));
-            }
+    private sealed class ScriptedClient(Func<string, string> reply) : ScriptedChatProvider(r => reply(r.SystemPrompt));
 
-            public Task<string> StreamAsync(
-                string systemPrompt, string userContent, double temperature, int maxTokens, IChatProgress progress,
-                System.Text.Json.Nodes.JsonArray? tools = null, CancellationToken ct = default)
-            {
-                throw new NotSupportedException();
-        }
-    }
-
-    private static AnthropicGuardrailRouterService Router(IAnthropicClient c) =>
+    private static AnthropicGuardrailRouterService Router(IChatProvider c) =>
         new(c, Options.Create(new AnthropicOptions()), NullLogger<AnthropicGuardrailRouterService>.Instance);
 
     [Theory]
@@ -335,8 +313,7 @@ public class AnthropicClientTests
     public async Task SystemPrompt_IsSentAsCacheableBlock()
     {
         var handler = new CapturingHandler();
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://example.test/") };
-        var client = new AnthropicClient(http, Options.Create(new AnthropicOptions { Model = "claude-sonnet-4-6" }), NullLogger<AnthropicClient>.Instance);
+        var client = new TestAnthropic(handler, new AnthropicOptions { Model = "claude-sonnet-4-6" });
 
         var text = await client.CompleteAsync("sys", "user", 0.0, 100);
 
@@ -351,8 +328,7 @@ public class AnthropicClientTests
     public async Task StructuredOutputConfig_IsSentToAnthropic()
     {
         var handler = new CapturingHandler();
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://example.test/") };
-        var client = new AnthropicClient(http, Options.Create(new AnthropicOptions { Model = "m" }), NullLogger<AnthropicClient>.Instance);
+        var client = new TestAnthropic(handler, new AnthropicOptions { Model = "m" });
         var outputConfig = new System.Text.Json.Nodes.JsonObject
         {
             ["format"] = new System.Text.Json.Nodes.JsonObject
@@ -375,7 +351,7 @@ public class AnthropicClientTests
         var stopped = new List<Activity>();
         using var listener = new ActivityListener
         {
-            ShouldListenTo = source => source.Name == Telemetry.Name,
+            ShouldListenTo = source => source.Name == Telemetry.Name || source.Name == LlmTelemetry.Name,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             ActivityStopped = activity =>
             {
@@ -396,10 +372,7 @@ public class AnthropicClientTests
             CacheReadCostPerMillionUsd = 30m,
             OutputCostPerMillionUsd = 40m
         };
-        var client = new AnthropicClient(
-            new HttpClient(new CapturingHandler()) { BaseAddress = new Uri("https://example.test/") },
-            Options.Create(options),
-            NullLogger<AnthropicClient>.Instance);
+        var client = new TestAnthropic(new CapturingHandler(), options);
 
         await client.CompleteAsync("sys", "user", 0.0, 100);
 

@@ -9,50 +9,43 @@ using Microsoft.Extensions.Options;
 namespace Helpdesk.Infrastructure.Ai;
 
 public sealed class AnthropicIntakeFormGenerator(
-    IAnthropicClient client,
+    IChatProvider client,
     IOptions<AnthropicOptions> options) : IIntakeFormGenerator
 {
     private readonly AnthropicOptions _options = options.Value;
 
-    private static readonly JsonObject OutputConfig = new()
+    private static readonly JsonObject Schema = new()
     {
-        ["format"] = new JsonObject
+        ["type"] = "object",
+        ["properties"] = new JsonObject
         {
-            ["type"] = "json_schema",
-            ["schema"] = new JsonObject
+            ["title"] = new JsonObject { ["type"] = "string" },
+            ["submitLabel"] = new JsonObject { ["type"] = "string" },
+            ["fields"] = new JsonObject
             {
-                ["type"] = "object",
-                ["properties"] = new JsonObject
+                ["type"] = "array",
+                ["items"] = new JsonObject
                 {
-                    ["title"] = new JsonObject { ["type"] = "string" },
-                    ["submitLabel"] = new JsonObject { ["type"] = "string" },
-                    ["fields"] = new JsonObject
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
                     {
-                        ["type"] = "array",
-                        ["items"] = new JsonObject
+                        ["id"] = new JsonObject { ["type"] = "string" },
+                        ["label"] = new JsonObject { ["type"] = "string" },
+                        ["description"] = new JsonObject { ["type"] = "string" },
+                        ["inputType"] = new JsonObject
                         {
-                            ["type"] = "object",
-                            ["properties"] = new JsonObject
-                            {
-                                ["id"] = new JsonObject { ["type"] = "string" },
-                                ["label"] = new JsonObject { ["type"] = "string" },
-                                ["description"] = new JsonObject { ["type"] = "string" },
-                                ["inputType"] = new JsonObject
-                                {
-                                    ["type"] = "string",
-                                    ["enum"] = new JsonArray("text", "textarea")
-                                },
-                                ["required"] = new JsonObject { ["type"] = "boolean" }
-                            },
-                            ["required"] = new JsonArray("id", "label", "description", "inputType", "required"),
-                            ["additionalProperties"] = false
-                        }
-                    }
-                },
-                ["required"] = new JsonArray("title", "submitLabel", "fields"),
-                ["additionalProperties"] = false
+                            ["type"] = "string",
+                            ["enum"] = new JsonArray("text", "textarea")
+                        },
+                        ["required"] = new JsonObject { ["type"] = "boolean" }
+                    },
+                    ["required"] = new JsonArray("id", "label", "description", "inputType", "required"),
+                    ["additionalProperties"] = false
+                }
             }
-        }
+        },
+        ["required"] = new JsonArray("title", "submitLabel", "fields"),
+        ["additionalProperties"] = false
     };
 
     public async Task<IntakeForm> GenerateAsync(
@@ -61,14 +54,15 @@ public sealed class AnthropicIntakeFormGenerator(
         try
         {
             var raw = await client.CompleteAsync(
-                Prompts.IntakeForm,
-                PromptInput.WithUserAgent(
-                    $"{PromptInput.Wrap("action_lane", lane)}\n\n{PromptInput.Wrap("user_query", userInput)}",
-                    userAgent),
-                _options.CoachTemperature,
-                _options.InferenceMaxTokens,
-                cancellationToken: cancellationToken,
-                outputConfig: OutputConfig);
+                new ChatRequest(
+                    Prompts.IntakeForm,
+                    PromptInput.WithUserAgent(
+                        $"{PromptInput.Wrap("action_lane", lane)}\n\n{PromptInput.Wrap("user_query", userInput)}",
+                        userAgent),
+                    _options.CoachTemperature,
+                    _options.InferenceMaxTokens,
+                    ResponseSchema: Schema),
+                cancellationToken: cancellationToken);
             return ParseForm(raw);
         }
         catch (Exception ex) when (ex is not OperationCanceledException and not IntakeFormGenerationException)

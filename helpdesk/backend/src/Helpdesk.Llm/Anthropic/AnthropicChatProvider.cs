@@ -1,75 +1,50 @@
-using System.Net;
 using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Net.ServerSentEvents;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Helpdesk.Core;
-using Helpdesk.Core.Interfaces;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 
-namespace Helpdesk.Infrastructure.Ai;
+namespace Helpdesk.Llm.Anthropic;
 
-public interface IAnthropicClient
+/// <summary>
+/// Anthropic Messages API. Supports streaming, structured output (<c>output_config</c>), server tools such as web
+/// search (with <c>pause_turn</c> continuation and citation collection) and prompt caching of the system prompt.
+/// </summary>
+public sealed class AnthropicChatProvider(HttpClient http, LlmProviderOptions options, ILogger<AnthropicChatProvider> logger)
+    : IChatProvider
 {
-    /// <param name="tools">Optional tool definitions (e.g. the server-side web search tool).</param>
-    /// <param name="outputConfig">Optional Anthropic structured-output configuration.</param>
-    /// <param name="progress">Optional; only told about rate-limit waits, the reply itself is returned whole.</param>
-    Task<string> CompleteAsync(
-        string systemPrompt, string userContent, double temperature, int maxTokens,
-        JsonArray? tools = null, CancellationToken cancellationToken = default, JsonObject? outputConfig = null,
-        IChatProgress? progress = null);
+    public const string DefaultEndpoint = "https://api.anthropic.com/";
 
-    /// <summary>
-    /// Same as <see cref="CompleteAsync"/> but uses the streaming Messages API and forwards text to
-    /// <paramref name="progress"/> as it arrives. The returned text equals the concatenated deltas.
-    /// </summary>
-    Task<string> StreamAsync(
-        string systemPrompt, string userContent, double temperature, int maxTokens, IChatProgress progress,
-        JsonArray? tools = null, CancellationToken cancellationToken = default);
-}
-
-public sealed class AnthropicClient(
-    HttpClient http, IOptions<AnthropicOptions> options, ILogger<AnthropicClient> logger) : IAnthropicClient
-{
     // A server-tool turn can pause mid-way; we resume it a bounded number of times.
     private const int MaxPauseContinuations = 3;
 
-    private readonly AnthropicOptions _options = options.Value;
-    private readonly record struct TokenUsage(int Input, int Output, int CacheWrite, int CacheRead)
+    private readonly Uri _messagesUri = BuildUri(options.Endpoint);
+
+    public string Provider => LlmProviders.Anthropic;
+    public string Model => options.Model;
+    public LlmCapabilities Capabilities =>
+        LlmCapabilities.Streaming | LlmCapabilities.StructuredOutput | LlmCapabilities.ServerTools | LlmCapabilities.PromptCaching;
+
+    public Task<string> CompleteAsync(ChatRequest request, ILlmProgress? progress = null, CancellationToken cancellationToken = default) =>
+        RunAsync(request, progress, stream: false, cancellationToken);
+
+    public Task<string> StreamAsync(ChatRequest request, ILlmProgress progress, CancellationToken cancellationToken = default) =>
+        RunAsync(request, progress, stream: true, cancellationToken);
+
+    private static Uri BuildUri(string? endpoint)
     {
-        public static TokenUsage Empty => new(0, 0, 0, 0);
-        public TokenUsage Add(TokenUsage value) =>
-            new(Input + value.Input, Output + value.Output, CacheWrite + value.CacheWrite, CacheRead + value.CacheRead);
+        var baseUri = string.IsNullOrWhiteSpace(endpoint) ? DefaultEndpoint : endpoint;
+        if (!baseUri.EndsWith('/')) baseUri += "/";
+        return new Uri(new Uri(baseUri), "v1/messages");
     }
 
-    public Task<string> CompleteAsync(
-        string systemPrompt, string userContent, double temperature, int maxTokens,
-        JsonArray? tools = null, CancellationToken cancellationToken = default, JsonObject? outputConfig = null,
-        IChatProgress? progress = null) =>
-        RunAsync(systemPrompt, userContent, temperature, maxTokens, tools, outputConfig, progress, stream: false, cancellationToken);
-
-    public Task<string> StreamAsync(
-        string systemPrompt, string userContent, double temperature, int maxTokens, IChatProgress progress,
-        JsonArray? tools = null, CancellationToken cancellationToken = default) =>
-        RunAsync(systemPrompt, userContent, temperature, maxTokens, tools, outputConfig: null, progress, stream: true, cancellationToken);
-
-    private async Task<string> RunAsync(
-        string systemPrompt, string userContent, double temperature, int maxTokens, JsonArray? tools,
-        JsonObject? outputConfig, IChatProgress? progress, bool stream, CancellationToken ct)
+    private async Task<string> RunAsync(ChatRequest request, ILlmProgress? progress, bool stream, CancellationToken ct)
     {
-        var parentActivity = Activity.Current;
-        var tenantId = FindTag(parentActivity, "helpdesk.tenant_id");
-        var correlationId = FindTag(parentActivity, "helpdesk.correlation_id");
-        using var activity = Telemetry.Source.StartActivity("anthropic.request");
-        activity?.SetTag("gen_ai.system", "anthropic");
-        activity?.SetTag("gen_ai.request.model", _options.Model);
-        if (tenantId is not null) activity?.SetTag("helpdesk.tenant_id", tenantId);
-        if (correlationId is not null) activity?.SetTag("helpdesk.correlation_id", correlationId);
+        using var activity = LlmTelemetry.StartRequest(Provider, Model);
 
-        var messages = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = userContent });
+        var messages = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = request.UserContent });
         var text = new StringBuilder();
         var sources = new Dictionary<string, string>(StringComparer.Ordinal);
         var totalUsage = TokenUsage.Empty;
@@ -78,7 +53,7 @@ public sealed class AnthropicClient(
         {
             for (var turn = 0; turn <= MaxPauseContinuations; turn++)
             {
-                var body = BuildBody(systemPrompt, messages, temperature, maxTokens, tools, outputConfig, stream);
+                var body = BuildBody(request, messages, stream);
                 var (content, stopReason, usage) = stream
                     ? await StreamTurnAsync(body, progress!, ct)
                     : await SendTurnAsync(body, progress, ct);
@@ -118,35 +93,39 @@ public sealed class AnthropicClient(
         }
         finally
         {
-            if (hasUsage) RecordUsage(totalUsage, tenantId, activity);
+            if (hasUsage) totalUsage.Record(Provider, options, activity, logger);
         }
     }
 
-    private JsonObject BuildBody(
-        string systemPrompt, JsonArray messages, double temperature, int maxTokens, JsonArray? tools,
-        JsonObject? outputConfig, bool stream)
+    private JsonObject BuildBody(ChatRequest request, JsonArray messages, bool stream)
     {
         // The system prompt is sent as a cacheable prefix block so repeated chat turns reuse it.
         var body = new JsonObject
         {
-            ["model"] = _options.Model,
-            ["max_tokens"] = maxTokens,
+            ["model"] = options.Model,
+            ["max_tokens"] = request.MaxTokens ?? options.MaxTokens,
             ["system"] = new JsonArray(new JsonObject
             {
                 ["type"] = "text",
-                ["text"] = systemPrompt,
+                ["text"] = request.SystemPrompt,
                 ["cache_control"] = new JsonObject { ["type"] = "ephemeral" }
             }),
             ["messages"] = messages.DeepClone()
         };
-        if (SupportsTemperature(_options.Model)) body["temperature"] = temperature;
-        if (tools is not null) body["tools"] = tools.DeepClone();
-        if (outputConfig is not null) body["output_config"] = outputConfig.DeepClone();
+        if (options.SupportsTemperature ?? SupportsTemperature(options.Model)) body["temperature"] = request.Temperature;
+        if (request.Tools is not null) body["tools"] = request.Tools.DeepClone();
+        if (request.ResponseSchema is not null)
+        {
+            body["output_config"] = new JsonObject
+            {
+                ["format"] = new JsonObject { ["type"] = "json_schema", ["schema"] = request.ResponseSchema.DeepClone() }
+            };
+        }
         if (stream) body["stream"] = true;
         return body;
     }
 
-    private static bool SupportsTemperature(string model)
+    internal static bool SupportsTemperature(string model)
     {
         var version = Regex.Match(model, @"-(?<major>\d+)-(?<minor>\d+)(?:-|$)");
         if (!version.Success) return false;
@@ -159,8 +138,17 @@ public sealed class AnthropicClient(
         return major < 4 || major == 4 && minor < 7;
     }
 
+    private Task<HttpResponseMessage> PostAsync(JsonObject body, bool stream, ILlmProgress? progress, CancellationToken ct) =>
+        RateLimitedSender.SendAsync(http, () =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, _messagesUri) { Content = JsonContent.Create(body) };
+            if (!string.IsNullOrEmpty(options.ApiKey)) request.Headers.TryAddWithoutValidation("x-api-key", options.ApiKey);
+            request.Headers.TryAddWithoutValidation("anthropic-version", options.AnthropicVersion);
+            return request;
+        }, stream, Provider, options, progress, ct);
+
     private async Task<(JsonArray Content, string? StopReason, TokenUsage Usage)> SendTurnAsync(
-        JsonObject body, IChatProgress? progress, CancellationToken ct)
+        JsonObject body, ILlmProgress? progress, CancellationToken ct)
     {
         using var response = await PostAsync(body, stream: false, progress, ct);
         var json = await response.Content.ReadFromJsonAsync<JsonNode>(ct)
@@ -175,7 +163,7 @@ public sealed class AnthropicClient(
     /// exactly as with the non-streaming API.
     /// </summary>
     private async Task<(JsonArray Content, string? StopReason, TokenUsage Usage)> StreamTurnAsync(
-        JsonObject body, IChatProgress progress, CancellationToken ct)
+        JsonObject body, ILlmProgress progress, CancellationToken ct)
     {
         using var response = await PostAsync(body, stream: true, progress, ct);
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
@@ -187,7 +175,7 @@ public sealed class AnthropicClient(
         var usage = TokenUsage.Empty;
 
         // Pings count as activity, so a silent connection (not a slow model) is what trips this.
-        var idleTimeout = TimeSpan.FromSeconds(_options.StreamIdleTimeoutSeconds);
+        var idleTimeout = TimeSpan.FromSeconds(options.StreamIdleTimeoutSeconds);
         using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
         idle.CancelAfter(idleTimeout);
 
@@ -266,40 +254,6 @@ public sealed class AnthropicClient(
         return (new JsonArray(blocks.Values.Select(b => (JsonNode?)b).ToArray()), stopReason, usage);
     }
 
-    private void RecordUsage(TokenUsage usage, string? tenantId, Activity? activity)
-    {
-        Telemetry.AnthropicInputTokens.Add(usage.Input);
-        Telemetry.AnthropicOutputTokens.Add(usage.Output);
-        Telemetry.AnthropicCacheWriteTokens.Add(usage.CacheWrite);
-        Telemetry.AnthropicCacheReadTokens.Add(usage.CacheRead);
-
-        var cost = EstimateCost(usage);
-        if (cost is { } estimatedCost)
-        {
-            Telemetry.AnthropicEstimatedCost.Record((double)estimatedCost);
-            activity?.SetTag("gen_ai.usage.cost_usd", estimatedCost);
-        }
-        activity?.SetTag("gen_ai.usage.input_tokens", usage.Input + usage.CacheWrite + usage.CacheRead);
-        activity?.SetTag("gen_ai.usage.output_tokens", usage.Output);
-        logger.LogInformation(
-            "Anthropic usage for Tenant: {TenantId}, Model: {Model}, InputTokens: {InputTokens}, CacheWriteTokens: {CacheWriteTokens}, CacheReadTokens: {CacheReadTokens}, OutputTokens: {OutputTokens}, EstimatedCostUsd: {EstimatedCostUsd}",
-            tenantId ?? "unknown", _options.Model, usage.Input, usage.CacheWrite, usage.CacheRead, usage.Output, cost);
-    }
-
-    private decimal? EstimateCost(TokenUsage usage)
-    {
-        if (_options.InputCostPerMillionUsd is not { } input
-            || _options.CacheWriteCostPerMillionUsd is not { } cacheWrite
-            || _options.CacheReadCostPerMillionUsd is not { } cacheRead
-            || _options.OutputCostPerMillionUsd is not { } output)
-        {
-            return null;
-        }
-
-        return (usage.Input * input + usage.CacheWrite * cacheWrite
-            + usage.CacheRead * cacheRead + usage.Output * output) / 1_000_000m;
-    }
-
     private static TokenUsage ReadUsage(JsonNode? usage) => new(
         GetInt(usage, "input_tokens") ?? 0,
         GetInt(usage, "output_tokens") ?? 0,
@@ -315,15 +269,6 @@ public sealed class AnthropicClient(
     private static int? GetInt(JsonNode? node, string property) =>
         node?[property] is JsonValue value && value.TryGetValue<int>(out var result) ? result : null;
 
-    private static string? FindTag(Activity? activity, string key)
-    {
-        for (var current = activity; current is not null; current = current.Parent)
-        {
-            if (current.GetTagItem(key) is { } value) return value.ToString();
-        }
-        return null;
-    }
-
     private static void FinishBlock(JsonObject block, StringBuilder buffer)
     {
         if (buffer.Length == 0) return;
@@ -337,66 +282,5 @@ public sealed class AnthropicClient(
                 break;
         }
         buffer.Clear();
-    }
-
-    /// <summary>
-    /// POSTs the request, honouring the <c>Retry-After</c> header of HTTP 429 responses. The wait can far exceed
-    /// a normal HTTP timeout, which is why callers on the hub path report it through <paramref name="progress"/>.
-    /// The standard resilience handler is configured not to retry 429, so this loop owns it.
-    /// </summary>
-    private async Task<HttpResponseMessage> PostAsync(
-        JsonObject body, bool stream, IChatProgress? progress, CancellationToken ct)
-    {
-        var maxWait = TimeSpan.FromSeconds(_options.RateLimitMaxWaitSeconds);
-
-        for (var attempt = 1; ; attempt++)
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Post, "v1/messages") { Content = JsonContent.Create(body) };
-            var response = await http.SendAsync(
-                request, stream ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead, ct);
-
-            if (response.StatusCode != HttpStatusCode.TooManyRequests)
-            {
-                try
-                {
-                    response.EnsureSuccessStatusCode();
-                    return response;
-                }
-                catch
-                {
-                    response.Dispose();
-                    throw;
-                }
-            }
-
-            var retryAfter = ReadRetryAfter(response);
-            response.Dispose();
-            Telemetry.UpstreamRateLimited.Add(1);
-
-            var wait = retryAfter ?? TimeSpan.FromSeconds(Math.Min(Math.Pow(2, attempt), 30));
-            if (attempt > _options.RateLimitMaxRetries || wait > maxWait)
-            {
-                throw new UpstreamRateLimitedException(retryAfter,
-                    $"Anthropic rate limit: retry after {(retryAfter ?? wait).TotalSeconds:0}s, giving up after {attempt} attempt(s).");
-            }
-
-            // Jitter only on a real wait so many queued jobs do not all resume in the same instant.
-            if (wait > TimeSpan.Zero) wait += TimeSpan.FromMilliseconds(Random.Shared.Next(0, 500));
-            Telemetry.UpstreamRateLimitWait.Record(wait.TotalSeconds);
-            if (progress is not null) await progress.OnRateLimitedAsync(wait, attempt, ct);
-            await Task.Delay(wait, ct);
-        }
-    }
-
-    private static TimeSpan? ReadRetryAfter(HttpResponseMessage response)
-    {
-        var header = response.Headers.RetryAfter;
-        if (header?.Delta is { } delta) return delta < TimeSpan.Zero ? TimeSpan.Zero : delta;
-        if (header?.Date is { } date)
-        {
-            var until = date - DateTimeOffset.UtcNow;
-            return until < TimeSpan.Zero ? TimeSpan.Zero : until;
-        }
-        return null;
     }
 }

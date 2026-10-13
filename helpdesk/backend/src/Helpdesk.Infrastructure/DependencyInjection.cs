@@ -27,6 +27,7 @@ public static class DependencyInjection
 
         var anthropic = config.GetSection(AnthropicOptions.SectionName).Get<AnthropicOptions>() ?? new();
         if (string.IsNullOrWhiteSpace(anthropic.ApiKey)) anthropic.ApiKey = config["ANTHROPIC_API_KEY"] ?? "";
+        var chatConfigured = HasExplicitChatRole(config) || anthropic.IsConfigured;
         var queueProvider = config.GetSection(QueueOptions.SectionName).Get<QueueOptions>()?.Provider;
         if (string.IsNullOrWhiteSpace(queueProvider))
         {
@@ -34,9 +35,10 @@ public static class DependencyInjection
         }
 
         // Offline fallbacks must never silently run outside development.
-        if (!env.IsDevelopment() && !anthropic.IsConfigured)
+        if (!env.IsDevelopment() && !chatConfigured)
         {
-            throw new InvalidOperationException("Anthropic:ApiKey is required outside Development.");
+            throw new InvalidOperationException(
+                "Anthropic:ApiKey (or an Llm:Roles:chat provider other than offline) is required outside Development.");
         }
         if (queueProvider is null)
         {
@@ -49,17 +51,19 @@ public static class DependencyInjection
         services.Configure<DlpOptions>(config.GetSection(DlpOptions.SectionName));
         services.AddSingleton<ISensitiveDataRedactor, SensitiveDataRedactor>();
 
-        if (anthropic.IsConfigured)
+        services.AddLlmProviders(config.GetSection(LlmOptions.SectionName));
+        // Without an explicit Llm:Roles:chat the legacy Anthropic section defines the chat role.
+        services.AddOptions<LlmOptions>().PostConfigure<IOptions<AnthropicOptions>>((llm, legacy) =>
         {
-            services.AddHttpClient<IAnthropicClient, AnthropicClient>((sp, http) =>
+            if (!llm.Roles.ContainsKey(ChatRole) && legacy.Value.IsConfigured)
             {
-                var o = sp.GetRequiredService<IOptions<AnthropicOptions>>().Value;
-                http.BaseAddress = new Uri(o.BaseUrl);
-                http.DefaultRequestHeaders.Add("x-api-key", o.ApiKey);
-                http.DefaultRequestHeaders.Add("anthropic-version", o.AnthropicVersion);
-                http.Timeout = Timeout.InfiniteTimeSpan; // owned by the resilience handler
-            }).AddHelpdeskResilience(
-                attemptTimeout: TimeSpan.FromSeconds(60), totalTimeout: TimeSpan.FromSeconds(150), callerHandlesRateLimits: true);
+                llm.Roles[ChatRole] = FromAnthropic(legacy.Value);
+            }
+        });
+
+        if (chatConfigured)
+        {
+            services.AddScoped<IChatProvider>(sp => sp.GetRequiredService<ILlmProviderRouter>().GetChat(ChatRole));
             services.AddScoped<IGuardrailRouterService, AnthropicGuardrailRouterService>();
             services.AddScoped<IPublicInferenceService, AnthropicPublicInferenceService>();
             services.AddScoped<IIntakeFormGenerator, AnthropicIntakeFormGenerator>();
@@ -88,6 +92,32 @@ public static class DependencyInjection
 
         return services;
     }
+
+    /// <summary>The model role used by the intake chat (guardrail, coach, inference and intake form).</summary>
+    public const string ChatRole = "chat";
+
+    public static bool HasExplicitChatRole(IConfiguration config)
+    {
+        var provider = config[$"{LlmOptions.SectionName}:Roles:{ChatRole}:Provider"];
+        return !string.IsNullOrWhiteSpace(provider) && LlmProviders.Normalize(provider) != LlmProviders.Offline;
+    }
+
+    public static LlmProviderOptions FromAnthropic(AnthropicOptions o) => new()
+    {
+        Provider = LlmProviders.Anthropic,
+        Model = o.Model,
+        Endpoint = o.BaseUrl,
+        ApiKey = o.ApiKey,
+        AnthropicVersion = o.AnthropicVersion,
+        MaxTokens = o.InferenceMaxTokens,
+        RateLimitMaxWaitSeconds = o.RateLimitMaxWaitSeconds,
+        RateLimitMaxRetries = o.RateLimitMaxRetries,
+        StreamIdleTimeoutSeconds = o.StreamIdleTimeoutSeconds,
+        InputCostPerMillionUsd = o.InputCostPerMillionUsd,
+        CacheWriteCostPerMillionUsd = o.CacheWriteCostPerMillionUsd,
+        CacheReadCostPerMillionUsd = o.CacheReadCostPerMillionUsd,
+        OutputCostPerMillionUsd = o.OutputCostPerMillionUsd
+    };
 
     private static void AddStorageQueue(IServiceCollection services, IConfiguration config, IHostEnvironment env)
     {

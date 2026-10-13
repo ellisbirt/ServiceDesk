@@ -3,9 +3,11 @@
     <Project Path="src/Helpdesk.Api/Helpdesk.Api.csproj" />
     <Project Path="src/Helpdesk.Core/Helpdesk.Core.csproj" />
     <Project Path="src/Helpdesk.Infrastructure/Helpdesk.Infrastructure.csproj" />
+    <Project Path="src/Helpdesk.Llm/Helpdesk.Llm.csproj" />
     <Project Path="src/Helpdesk.Shared/Helpdesk.Shared.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Helpdesk.Api.Tests/Helpdesk.Api.Tests.csproj" />
+    <Project Path="tests/Helpdesk.Llm.Tests/Helpdesk.Llm.Tests.csproj" />
   </Folder>
 </Solution>

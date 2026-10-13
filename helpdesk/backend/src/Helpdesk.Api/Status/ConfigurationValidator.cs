@@ -47,6 +47,7 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
         var dev = env.IsDevelopment();
         ValidateAuth(dev, Pass, Warn, Fail, Check);
         ValidateAnthropic(dev, Pass, Warn, Fail, Check);
+        ValidateLlm(Pass, Fail, Check);
         ValidateSearch(Pass, Warn, Fail, Check);
         ValidateQueue(dev, Pass, Warn, Fail, Check);
         ValidateDlp(Pass, Fail);
@@ -95,7 +96,9 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
         var o = config.GetSection(AnthropicOptions.SectionName).Get<AnthropicOptions>() ?? new();
         if (string.IsNullOrWhiteSpace(o.ApiKey)) o.ApiKey = config["ANTHROPIC_API_KEY"] ?? "";
 
+        var explicitChat = Helpdesk.Infrastructure.DependencyInjection.HasExplicitChatRole(config);
         if (o.IsConfigured) pass(area, "ApiKey", "An API key is configured.");
+        else if (explicitChat) pass(area, "ApiKey", "Not needed: Llm:Roles:chat selects the chat provider.");
         else if (dev) warn(area, "ApiKey", "No API key: offline keyword router and canned replies are used (Development only).");
         else fail(area, "ApiKey", "Anthropic:ApiKey (or ANTHROPIC_API_KEY) is required outside Development.");
 
@@ -117,6 +120,29 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
             "Web search tool settings are valid.", "Anthropic:WebSearchToolType must be set and Anthropic:WebSearchMaxUses greater than 0.");
     }
 
+    /// <summary>Checks the optional <c>Llm:Roles:chat</c> override that replaces the Anthropic section.</summary>
+    private void ValidateLlm(Report pass, Report fail, Verify check)
+    {
+        const string area = "Llm";
+        var role = ExplicitChatRole();
+        if (role is null) return;
+
+        var provider = LlmProviders.Normalize(role.Provider);
+        if (!LlmProviders.All.Contains(provider))
+        {
+            fail(area, "ChatProvider", $"Unknown Llm:Roles:chat:Provider '{role.Provider}'. Available: {string.Join(", ", LlmProviders.All)}.");
+            return;
+        }
+        pass(area, "ChatProvider", $"The intake chat uses the '{provider}' provider.");
+        check(!string.IsNullOrWhiteSpace(role.Model), area, "ChatModel",
+            $"Chat model is '{role.Model}'.", "Llm:Roles:chat:Model is empty.");
+    }
+
+    private LlmProviderOptions? ExplicitChatRole() =>
+        Helpdesk.Infrastructure.DependencyInjection.HasExplicitChatRole(config)
+            ? config.GetSection($"{LlmOptions.SectionName}:Roles:{Helpdesk.Infrastructure.DependencyInjection.ChatRole}").Get<LlmProviderOptions>()
+            : null;
+
     private void ValidateSearch(Report pass, Report warn, Report fail, Verify check)
     {
         const string area = "Search";
@@ -125,6 +151,12 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
 
         if (SearchProviderCatalog.IsNativeClaude(search.Provider))
         {
+            if (ExplicitChatRole() is { } chat && LlmProviders.Normalize(chat.Provider) != LlmProviders.Anthropic)
+            {
+                fail(area, "Provider",
+                    "Search:Provider 'Claude' needs an Anthropic chat provider; Llm:Roles:chat uses another provider. Choose a separate search provider.");
+                return;
+            }
             pass(area, "Provider", "Claude native web search (no separate credentials; web search must be enabled for the Anthropic organisation).");
             return;
         }
