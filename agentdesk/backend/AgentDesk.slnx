@@ -1,0 +1,15 @@
+﻿<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AgentDesk.Core/AgentDesk.Core.csproj" />
+    <Project Path="src/AgentDesk.Infrastructure/AgentDesk.Infrastructure.csproj" />
+    <Project Path="src/AgentDesk.Api/AgentDesk.Api.csproj" />
+  </Folder>
+  <Folder Name="/shared/">
+    <Project Path="../../helpdesk/backend/src/Helpdesk.Llm/Helpdesk.Llm.csproj" />
+    <Project Path="../../helpdesk/backend/src/Helpdesk.Dlp/Helpdesk.Dlp.csproj" />
+    <Project Path="../../helpdesk/backend/src/Helpdesk.Shared/Helpdesk.Shared.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AgentDesk.Tests/AgentDesk.Tests.csproj" />
+  </Folder>
+</Solution>
