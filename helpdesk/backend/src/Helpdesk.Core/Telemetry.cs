@@ -29,8 +29,6 @@ public static class Telemetry
     public static readonly Histogram<double> ChatJobDuration =
         Meter.CreateHistogram<double>("helpdesk.chat.job.duration", unit: "s", description: "Wall time of a chat job, including rate-limit waits.");
 
-    public static readonly Counter<long> Redactions =
-        Meter.CreateCounter<long>("helpdesk.redactions", description: "Sensitive values removed before leaving the service.");
 
     // Model call metrics (tokens, cost, 429s) live in Helpdesk.Llm.LlmTelemetry under the "Helpdesk.Llm" meter.
 

@@ -1,10 +1,9 @@
-using Helpdesk.Core.Interfaces;
 
-namespace Helpdesk.Infrastructure.Security;
+namespace Helpdesk.Dlp;
 
 /// <summary>
 /// Overrides for what is redacted where. Only overrides go in configuration; the defaults live in
-/// <see cref="DlpPolicy"/>. Names are case-insensitive: destinations are <c>Model</c>, <c>Search</c>, <c>Queue</c>;
+/// <see cref="DlpPolicy"/>. Names are case-insensitive: destinations are <c>Model</c>, <c>Search</c>, <c>Queue</c>, <c>Embedding</c>;
 /// categories are <c>GovernmentId</c>, <c>Iban</c>, <c>Email</c>, <c>Phone</c>; actions are <c>Redact</c>, <c>Allow</c>.
 /// <code>
 /// "Dlp": {
@@ -39,8 +38,8 @@ public sealed class DlpPolicy
     public static DlpAction Default(DlpCategory category, EgressDestination destination) => category switch
     {
         // Work email addresses and phone numbers are often what an IT problem is about, so the model and the
-        // ticket keep them; a third-party search engine never needs them.
-        DlpCategory.Email or DlpCategory.Phone => destination == EgressDestination.Search ? DlpAction.Redact : DlpAction.Allow,
+        // ticket keep them; a third-party search engine and stored KB vectors never need them.
+        DlpCategory.Email or DlpCategory.Phone => destination is EgressDestination.Search or EgressDestination.Embedding ? DlpAction.Redact : DlpAction.Allow,
         _ => DlpAction.Redact
     };
 
@@ -77,7 +76,7 @@ public sealed class DlpPolicy
         {
             if (!Enum.TryParse<EgressDestination>(destinationName, ignoreCase: true, out var destination) || !Enum.IsDefined(destination))
             {
-                errors.Add($"{path}:{destinationName} is not a destination (Model, Search, Queue).");
+                errors.Add($"{path}:{destinationName} is not a destination (Model, Search, Queue, Embedding).");
                 continue;
             }
             foreach (var (categoryName, actionName) in categories)

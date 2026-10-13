@@ -113,6 +113,10 @@ public class RedactionTests
         var search = Redactor.Redact(input, EgressDestination.Search);
         Assert.DoesNotContain(value, search.Text);
         Assert.Equal(1, search.Count);
+
+        var embedding = Redactor.Redact(input, EgressDestination.Embedding);
+        Assert.DoesNotContain(value, embedding.Text);
+        Assert.Equal(1, embedding.Count);
     }
 
     [Fact]
@@ -155,6 +159,15 @@ public class RedactionTests
 
         Assert.Contains("a@b.com", redactor.Redact("a@b.com", EgressDestination.Search, "t1").Text);
         Assert.DoesNotContain("a@b.com", redactor.Redact("a@b.com", EgressDestination.Search, "t2").Text);
+    }
+
+    [Fact]
+    public void EmbeddingDestination_CanBeRelaxedPerTenant()
+    {
+        var redactor = Create(Policy("Embedding", "Email", "Allow", tenant: "kb-open"));
+
+        Assert.Contains("a@b.com", redactor.Redact("a@b.com", EgressDestination.Embedding, "kb-open").Text);
+        Assert.DoesNotContain("a@b.com", redactor.Redact("a@b.com", EgressDestination.Embedding, "other").Text);
     }
 
     [Fact]

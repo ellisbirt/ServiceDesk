@@ -55,6 +55,7 @@ public static class ObservabilityExtensions
             .WithMetrics(m => m
                 .AddMeter(Telemetry.Name)
                 .AddMeter(LlmTelemetry.Name)
+                .AddMeter(DlpTelemetry.Name)
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation());

@@ -1,9 +1,7 @@
 using System.Text.RegularExpressions;
-using Helpdesk.Core;
-using Helpdesk.Core.Interfaces;
 using Microsoft.Extensions.Options;
 
-namespace Helpdesk.Infrastructure.Security;
+namespace Helpdesk.Dlp;
 
 /// <summary>
 /// Pattern-based data loss prevention for text leaving the service. Best effort, not a DLP product.
@@ -141,7 +139,7 @@ public sealed partial class SensitiveDataRedactor(IOptions<DlpOptions> options) 
     }
 
     private static void Record(string category, EgressDestination destination, int count) =>
-        Telemetry.Redactions.Add(count,
+        DlpTelemetry.Redactions.Add(count,
             new KeyValuePair<string, object?>("category", category),
             new KeyValuePair<string, object?>("destination", destination.ToString()));
 

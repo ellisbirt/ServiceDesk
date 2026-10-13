@@ -93,6 +93,9 @@ public sealed class ChatPipeline(
                 break;
 
             case ActionLanes.PrivateCorp:
+                // From the original text, not the model's copy: the queue has its own policy, which may keep
+                // values (such as a contact number) that the model never needed.
+                var queuePayload = Sanitize(original.MessageText, EgressDestination.Queue, tenantId);
                 await queuePublisher.PublishAsync(new ProcessPrivateCorpTicketEvent
                 {
                     TenantId = tenantId,
@@ -101,9 +104,8 @@ public sealed class ChatPipeline(
                     CorrelationId = Activity.Current?.GetTagItem("helpdesk.correlation_id")?.ToString()
                         ?? Activity.Current?.TraceId.ToString()
                         ?? Guid.NewGuid().ToString("N"),
-                    // From the original text, not the model's copy: the queue has its own policy, which may keep
-                    // values (such as a contact number) that the model never needed.
-                    SanitizedPayload = Sanitize(original.MessageText, EgressDestination.Queue, tenantId)
+                    SanitizedPayload = queuePayload,
+                    Subject = TicketSubject.FromText(queuePayload)
                 }, ct);
                 logger.LogInformation("Private infrastructure payload successfully queued for Tenant: {TenantId}", tenantId);
                 response = Reply(request, ActionLanes.PrivateCorp,

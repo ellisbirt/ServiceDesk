@@ -286,6 +286,9 @@ public class ChatEndpointTests
         Assert.Equal("tenant-z", evt.TenantId);
         Assert.Equal("user-1", evt.UserId);
         Assert.Equal("VPN is down", evt.SanitizedPayload);
+        Assert.Equal("VPN is down", evt.Subject);
+        Assert.Equal(ProcessPrivateCorpTicketEvent.CurrentSchemaVersion, evt.SchemaVersion);
+        Assert.Null(evt.LaneConfidence);
         Assert.Equal(res.Headers.GetValues("X-Correlation-ID").Single(), evt.CorrelationId);
     }
 

@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Helpdesk.Api/Helpdesk.Api.csproj" />
     <Project Path="src/Helpdesk.Core/Helpdesk.Core.csproj" />
+    <Project Path="src/Helpdesk.Dlp/Helpdesk.Dlp.csproj" />
     <Project Path="src/Helpdesk.Infrastructure/Helpdesk.Infrastructure.csproj" />
     <Project Path="src/Helpdesk.Llm/Helpdesk.Llm.csproj" />
     <Project Path="src/Helpdesk.Shared/Helpdesk.Shared.csproj" />

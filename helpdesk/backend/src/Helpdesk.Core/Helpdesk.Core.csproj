@@ -3,6 +3,11 @@
   <ItemGroup>
     <ProjectReference Include="..\Helpdesk.Shared\Helpdesk.Shared.csproj" />
     <ProjectReference Include="..\Helpdesk.Llm\Helpdesk.Llm.csproj" />
+    <ProjectReference Include="..\Helpdesk.Dlp\Helpdesk.Dlp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Helpdesk.Dlp" />
   </ItemGroup>
 
   <PropertyGroup>

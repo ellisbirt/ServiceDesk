@@ -48,8 +48,7 @@ public static class DependencyInjection
 
         services.AddHttpContextAccessor();
         services.AddScoped<ITenantProvider, JwtTenantProvider>();
-        services.Configure<DlpOptions>(config.GetSection(DlpOptions.SectionName));
-        services.AddSingleton<ISensitiveDataRedactor, SensitiveDataRedactor>();
+        services.AddHelpdeskDlp(config);
 
         services.AddLlmProviders(config.GetSection(LlmOptions.SectionName));
         // Without an explicit Llm:Roles:chat the legacy Anthropic section defines the chat role.

@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <Using Include="Helpdesk.Llm" />
+    <Using Include="Helpdesk.Dlp" />
   </ItemGroup>
 
   <ItemGroup>

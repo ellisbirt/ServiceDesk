@@ -81,6 +81,41 @@ public class QueuePublisherTests
         Assert.Equal(evt.EventId, roundTrip.EventId);
         Assert.Equal("tenant-1", roundTrip.TenantId);
         Assert.Equal("chat-correlation-1", roundTrip.CorrelationId);
+        Assert.Equal(1, roundTrip.SchemaVersion);
+    }
+
+    [Fact]
+    public void Event_DeserializesVersionlessPayloads_AndOmitsNullOptionalFields()
+    {
+        const string legacy = """
+            {"eventId":"6f1c2b0e-0000-4000-8000-000000000001","tenantId":"t","userId":"u",
+             "conversationId":"6f1c2b0e-0000-4000-8000-000000000002","correlationId":"c","sanitizedPayload":"p",
+             "timestampUtc":"2026-01-01T00:00:00Z","futureField":true}
+            """;
+        var evt = JsonSerializer.Deserialize<ProcessPrivateCorpTicketEvent>(legacy)!;
+        Assert.Equal(1, evt.SchemaVersion);
+        Assert.Null(evt.Subject);
+        Assert.Null(evt.LaneConfidence);
+
+        var json = JsonSerializer.Serialize(Event());
+        Assert.Contains("\"schemaVersion\":1", json);
+        Assert.DoesNotContain("laneConfidence", json);
+        Assert.DoesNotContain("subject", json);
+    }
+
+    [Theory]
+    [InlineData(null, "(no subject)")]
+    [InlineData("   ", "(no subject)")]
+    [InlineData("\n\n  VPN   is down \nmore detail", "VPN is down")]
+    public void TicketSubject_UsesFirstLine(string? input, string expected) =>
+        Assert.Equal(expected, TicketSubject.FromText(input));
+
+    [Fact]
+    public void TicketSubject_TruncatesOnWordBoundary()
+    {
+        var subject = TicketSubject.FromText(string.Join(' ', Enumerable.Repeat("word", 60)));
+        Assert.True(subject.Length <= TicketSubject.MaxLength);
+        Assert.EndsWith("word\u2026", subject);
     }
 
     public sealed class Env(string name) : IHostEnvironment

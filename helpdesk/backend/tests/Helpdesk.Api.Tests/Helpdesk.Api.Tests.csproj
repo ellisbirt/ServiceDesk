@@ -20,6 +20,7 @@
   <ItemGroup>
     <Using Include="Xunit" />
     <Using Include="Helpdesk.Llm" />
+    <Using Include="Helpdesk.Dlp" />
   </ItemGroup>
 
   <ItemGroup>
