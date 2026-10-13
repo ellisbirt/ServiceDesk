@@ -9,6 +9,7 @@ using AgentDesk.Infrastructure.Intake;
 using Helpdesk.Shared.Events;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace AgentDesk.Tests;
@@ -19,6 +20,12 @@ public sealed class AgentDeskFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Development");
         builder.UseSetting("Kb:Embedding:SweepEnabled", "false");
+        // appsettings.Development.json points assist at Anthropic; tests must stay offline and free.
+        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Llm:Roles:assist:Provider"] = "offline",
+            ["Llm:Roles:assist:Model"] = "offline-assist",
+        }));
     }
 }
 

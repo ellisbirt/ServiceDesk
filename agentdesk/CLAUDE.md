@@ -47,5 +47,5 @@ cd agentdesk\frontend; npm run debug                          # API :5139 (dotne
   - Use structured output and validate the result.
   - Bump the prompt version constant in `TicketAssistService` (for example `draft-reply/1`) when you change a prompt.
 - Do not add RAG or vector queries without an explicit request. Embeddings are stored for later use only.
-- Backend tests must stay offline. Use the in-memory stores, the `offline` provider or a fake `ILlmProviderRouter`.
+- Backend tests must stay offline. Use the in-memory stores, the `offline` provider or a fake `ILlmProviderRouter`. `appsettings.Development.json` sets `assist` to Anthropic, so any factory using the Development environment must pin `Llm:Roles:assist` to `offline` (see `AgentDeskFactory`).
 - Don't run anything that calls a paid LLM API without the user's go-ahead.

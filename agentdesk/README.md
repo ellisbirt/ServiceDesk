@@ -52,7 +52,7 @@ The defaults need nothing installed beyond .NET and Node:
 |---|---|---|
 | Storage | `Storage:Provider=InMemory` | Data is lost when the API restarts. |
 | Attachments | `Blobs:Provider=InMemory` | Uploads go to an in-process store served from `/dev-blobs/...`. |
-| LLM | `Llm:Roles:*:Provider=offline` | Canned structured drafts and deterministic hash-based embeddings. |
+| LLM | `assist` = `anthropic` (`claude-sonnet-5-5`) in Development, `offline` otherwise; `embedding` = `offline` | Assist calls Claude using `ANTHROPIC_API_KEY` from the environment. Anthropic has no embeddings API, so embeddings stay on deterministic hash-based vectors unless you point the `embedding` role at `azure_openai`, `openai` or `ollama`. Without a key the assist endpoints return an error; set `Llm__Roles__assist__Provider=offline` for canned drafts. |
 | Intake | `Intake:Provider=None` | Nothing reads the queue. Create tickets in the UI. |
 | Auth | Development dev auth | `X-Dev-*` headers; the UI sends them automatically and shows a "(dev)" badge. |
 
@@ -260,7 +260,7 @@ npx playwright install chromium           # once
 npm run test:e2e                          # Playwright against a mocked API on :5175, with axe checks
 ```
 
-The backend tests use the in-memory stores and offline providers, so they need no emulator or API key.
+The backend tests use the in-memory stores and offline providers, so they need no emulator or API key. `AgentDeskFactory` pins the `assist` role back to `offline`, overriding the Anthropic setting in `appsettings.Development.json`.
 
 ## Known gaps
 
