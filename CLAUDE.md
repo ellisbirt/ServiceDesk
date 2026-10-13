@@ -4,7 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-Development of a system prompt for an IT service-desk assistant (ticket classification, severity, etc.), plus an eval harness to measure prompt changes. Not a git repo at present.
+Development of a system prompt for an IT service-desk assistant (ticket classification, severity, etc.), plus an eval harness to measure prompt changes. The repo also holds the applications built around that prompt.
+
+- `helpdesk/` — the intake service: a .NET API with a React UI that classifies tickets and publishes `ProcessPrivateCorpTicketEvent`. Its `backend/src` holds the shared libraries:
+  - `Helpdesk.Llm`: the pluggable chat and embedding providers.
+  - `Helpdesk.Dlp`: redaction.
+  - `Helpdesk.Shared`: the event contract and prompt-input wrapping.
+- `agentdesk/` — AgentDesk, the downstream agent console (.NET 10 API with a React UI). It stores tickets in Cosmos DB and attachments in Blob Storage, and adds the knowledge base and LLM reply assist. See `agentdesk/CLAUDE.md` and `agentdesk/README.md`.
 
 - `evals/` — the **single source of truth** for the prompt and its tests: `system-prompt.md` (the prompt under development), `cases.json` (eval cases with stable IDs), `rubric.md` (0–10 scoring, pass = all `must` satisfied, no `must_not` hit, score ≥ 8). Language/SDK-agnostic.
 - `python-evals/` — `promptevals`, a Python package/CLI that reads `../evals/` via paths in `python-evals/evals.toml`. `python-evals/README.md` is the full user guide (case format, check types, output layout); read it before changing CLI behaviour.

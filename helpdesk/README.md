@@ -44,6 +44,7 @@ Set secrets with `dotnet user-secrets` or environment variables (`Anthropic__Api
 |---|---|
 | `Auth:Authority` / `Auth:Audience` | Entra External ID JWT validation (e.g. `https://<tenant>.ciamlogin.com/<tenant-id>/v2.0`). Tokens must carry the `tenant_id` claim. |
 | `Anthropic:ApiKey`, `Anthropic:Model` | Claude access. If `Anthropic:ApiKey` is empty the standard `ANTHROPIC_API_KEY` environment variable is used (the same one the evals read). Default model `claude-sonnet-5-5`; override with `Anthropic__Model`. |
+| `Llm:Roles:chat` | Optional. This uses the shared `Helpdesk.Llm` role configuration (`Provider`, `Model`, `ApiKey`, `Endpoint`, …, the same shape AgentDesk uses). When it is unset, the legacy `Anthropic` section defines the chat role. |
 | `Anthropic:WebSearchToolType`, `Anthropic:WebSearchMaxUses` | Anthropic-hosted Claude web search tool version (default `web_search_20260318`) and maximum searches per request (default 3). |
 | `Search:Provider` | Web search backend for the `PUBLIC_SEARCH` lane. One of `Tavily` (default), `Brave`, `Serper`, `Google`, `SearXNG`, or `Claude` (see "Web search providers"). |
 | `Search:Providers:<Name>:ApiKey` | Credentials for the chosen provider. `Search:ApiKey` is a shorthand for the active provider. `Google` also needs `SearchEngineId`; `SearXNG` needs `BaseUrl` instead of a key. If the chosen provider has no credentials, a stub is used and search answers say no results are available. |
@@ -186,6 +187,6 @@ These were found in an enterprise/SaaS review and are deliberately not fixed yet
 - Spec section 3 says ".NET 9" while the header says .NET 10; this uses .NET 10.
 - "Claude 3.5 Sonnet" is retired; the configurable default is `claude-sonnet-5-5`. Native Anthropic search uses `web_search_20260318`.
 - The specified endpoint is a plain request/response POST, which is kept as a synchronous fallback. The UI uses the SignalR hub (see "Asynchronous chat").
-- The Service Bus worker, Cosmos DB RAG and PIM integration are outside this component. The PIM access-request card currently only confirms locally on submit; it is not wired to Entra PIM.
+- The downstream queue consumer is [AgentDesk](../agentdesk/README.md). It reads `ProcessPrivateCorpTicketEvent` from the same Storage queue or Service Bus queue and creates tickets in Cosmos DB. Cosmos DB RAG and PIM integration are outside this component. The PIM access-request card currently only confirms locally on submit; it is not wired to Entra PIM.
 - The spec's EF Core tenant-filter rule has nothing to apply to here, as this component has no database entities.
 - Service Bus `PartitionKey` (Service Bus provider only) only works on partitioning-enabled queues and cannot differ from a `SessionId` if sessions are enabled.
