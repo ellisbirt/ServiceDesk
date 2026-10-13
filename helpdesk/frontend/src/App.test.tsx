@@ -71,43 +71,81 @@ describe('ChatMessageResponseBubble', () => {
     expect(document.querySelector('img')).toBeNull();
   });
 
-  it('renders the scenario-specific form supplied with the response', async () => {
-    render(
-      <ChatMessageResponseBubble
-        response={{
-          ...base,
-          responseText: 'Your battery may need troubleshooting.',
-          intakeForm: {
-            title: 'Laptop battery details',
-            submitLabel: 'Save details',
-            fields: [
-              {
-                id: 'device_model',
-                label: 'Laptop make and model',
-                description: 'For example, the model shown in Settings.',
-                inputType: 'text',
-                required: true,
-              },
-              {
-                id: 'battery_health',
-                label: 'Battery health',
-                description: 'Share the reported health or any recent changes.',
-                inputType: 'textarea',
-                required: false,
-              },
-            ],
-          },
-        }}
-      />,
-    );
+  const escalation: HelpdeskApiResponse = {
+    ...base,
+    actionLane: 'PRIVATE_CORP',
+    responseText: 'Complete the form below to send it to the service desk.',
+    metadata: { escalationToken: 't1.k.payload.mac' },
+    intakeForm: {
+      title: 'Laptop battery details',
+      submitLabel: 'Send to the service desk',
+      fields: [
+        {
+          id: 'device_model',
+          label: 'Laptop make and model',
+          description: 'For example, the model shown in Settings.',
+          inputType: 'text',
+          required: true,
+        },
+        {
+          id: 'battery_health',
+          label: 'Battery health',
+          description: 'Share the reported health or any recent changes.',
+          inputType: 'textarea',
+          required: false,
+        },
+      ],
+    },
+  };
+
+  it('sends the pending escalation with the completed form, then locks the form', async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(JSON.stringify({ ticketEventId: 'e1', status: 'queued' }), { status: 202 }));
+    render(<ChatMessageResponseBubble response={escalation} />);
+
     expect(screen.getByRole('heading', { name: 'Laptop battery details' })).toBeInTheDocument();
+    expect(screen.queryByText(/does not submit/i)).toBeNull();
     const model = screen.getByRole('textbox', { name: /Laptop make and model/ });
     expect(model).toBeRequired();
-    expect(screen.getByRole('textbox', { name: /Battery health/ })).toBeInTheDocument();
-    await userEvent.type(model, 'Example laptop');
-    await userEvent.click(screen.getByRole('button', { name: 'Save details' }));
-    expect(screen.getByRole('status')).toHaveTextContent('No ticket has been submitted');
-    expect(screen.getByText('Example laptop')).toBeInTheDocument();
+    await userEvent.type(model, ' Example laptop ');
+    await userEvent.click(screen.getByRole('button', { name: 'Send to the service desk' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Sent to the service desk');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toMatch(/\/api\/v1\/chat\/escalate$/);
+    expect(JSON.parse(init!.body as string)).toEqual({
+      conversationId: 'c1',
+      escalationToken: 't1.k.payload.mac',
+      formTitle: 'Laptop battery details',
+      answers: [
+        { label: 'Laptop make and model', value: 'Example laptop' },
+        { label: 'Battery health', value: '' },
+      ],
+    });
+    expect(model).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Send to the service desk' })).toBeNull();
+  });
+
+  it('shows the server error and lets the user retry when sending fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ errors: { escalationToken: ['This request has expired or is not valid. Please send your message again.'] } }),
+        { status: 400 },
+      ),
+    );
+    render(<ChatMessageResponseBubble response={escalation} />);
+    await userEvent.type(screen.getByRole('textbox', { name: /Laptop make and model/ }), 'X1');
+    await userEvent.click(screen.getByRole('button', { name: 'Send to the service desk' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('has expired');
+    expect(screen.getByRole('button', { name: 'Send to the service desk' })).toBeEnabled();
+  });
+
+  it('does not show a form without a pending escalation token', () => {
+    render(<ChatMessageResponseBubble response={{ ...escalation, metadata: {} }} />);
+    expect(screen.queryByRole('heading', { name: 'Laptop battery details' })).toBeNull();
   });
 });
 

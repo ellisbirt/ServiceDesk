@@ -1,6 +1,6 @@
 import type { FC } from 'react';
 import ReactMarkdown from 'react-markdown';
-import type { ActionLane, HelpdeskApiResponse } from '../lib/api';
+import { ESCALATION_TOKEN_METADATA_KEY, type ActionLane, type HelpdeskApiResponse } from '../lib/api';
 import { IntakeFormCard } from './IntakeFormCard';
 
 const LANE_LABELS: Record<ActionLane, string> = {
@@ -29,7 +29,13 @@ export const ChatMessageResponseBubble: FC<{ response: HelpdeskApiResponse }> = 
         <ReactMarkdown>{response.responseText}</ReactMarkdown>
       </div>
 
-      {response.intakeForm && <IntakeFormCard form={response.intakeForm} />}
+      {response.intakeForm && response.metadata?.[ESCALATION_TOKEN_METADATA_KEY] && (
+        <IntakeFormCard
+          form={response.intakeForm}
+          conversationId={response.conversationId}
+          escalationToken={response.metadata[ESCALATION_TOKEN_METADATA_KEY]}
+        />
+      )}
     </div>
   );
 };

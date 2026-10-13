@@ -3,7 +3,6 @@ using Helpdesk.Core;
 using Helpdesk.Core.Interfaces;
 using Helpdesk.Infrastructure.Ai;
 using Helpdesk.Shared.Contracts;
-using Helpdesk.Shared.Events;
 
 namespace Helpdesk.Api.Chat;
 
@@ -19,9 +18,9 @@ public sealed class ChatPipeline(
     IPublicInferenceService inferenceService,
     IIntakeFormGenerator intakeFormGenerator,
     ILiveSearchService searchService,
-    ITicketQueuePublisher queuePublisher,
     ISensitiveDataRedactor redactor,
     IConversationSigner signer,
+    EscalationTokens escalationTokens,
     ILogger<ChatPipeline> logger)
 {
     public async Task<HelpdeskApiResponse> RunAsync(
@@ -96,20 +95,18 @@ public sealed class ChatPipeline(
                 // From the original text, not the model's copy: the queue has its own policy, which may keep
                 // values (such as a contact number) that the model never needed.
                 var queuePayload = Sanitize(original.MessageText, EgressDestination.Queue, tenantId);
-                await queuePublisher.PublishAsync(new ProcessPrivateCorpTicketEvent
+                // Nothing is queued yet: the ticket is raised only once the follow-up form is submitted
+                // (POST /api/v1/chat/escalate), with the request and the answers together.
+                logger.LogInformation("Private infrastructure request awaiting follow-up form for Tenant: {TenantId}", tenantId);
+                response = Reply(request, ActionLanes.PrivateCorp, Prompts.EscalationPending) with
                 {
-                    TenantId = tenantId,
-                    UserId = userId,
-                    ConversationId = request.ConversationId,
-                    CorrelationId = Activity.Current?.GetTagItem("helpdesk.correlation_id")?.ToString()
-                        ?? Activity.Current?.TraceId.ToString()
-                        ?? Guid.NewGuid().ToString("N"),
-                    SanitizedPayload = queuePayload,
-                    Subject = TicketSubject.FromText(queuePayload)
-                }, ct);
-                logger.LogInformation("Private infrastructure payload successfully queued for Tenant: {TenantId}", tenantId);
-                response = Reply(request, ActionLanes.PrivateCorp,
-                    "Your request references localized corporate systems, so I've escalated it to our infrastructure team. You'll receive a ticket reference by email.");
+                    IntakeForm = await TryGenerateFormAsync(request.MessageText, lane, tenantId, ct, userAgent)
+                        ?? FallbackForm,
+                    Metadata = new()
+                    {
+                        [EscalationTokenMetadataKey] = escalationTokens.Issue(tenantId, userId, request.ConversationId, queuePayload)
+                    }
+                };
                 break;
 
             default:
@@ -117,8 +114,42 @@ public sealed class ChatPipeline(
                 throw new UnsupportedLaneException(lane);
         }
 
-        var form = await intakeFormGenerator.GenerateAsync(request.MessageText, lane, ct, userAgent);
-        return response with { IntakeForm = form };
+        return response;
+    }
+
+    /// <summary>Response metadata key holding the pending escalation's token, which the form submission must return.</summary>
+    public const string EscalationTokenMetadataKey = "escalationToken";
+
+    /// <summary>Used when no tailored form can be generated, so the request can still be sent.</summary>
+    public static readonly IntakeForm FallbackForm = new()
+    {
+        Title = "Request details",
+        SubmitLabel = "Send to the service desk",
+        Fields =
+        [
+            new IntakeFormField
+            {
+                Id = "additional_details",
+                Label = "Additional details",
+                Description = "Anything else the team should know: affected systems, when it started, and how urgent it is.",
+                InputType = "textarea"
+            }
+        ]
+    };
+
+    // A form failure falls back to a generic form rather than failing the reply.
+    private async Task<IntakeForm?> TryGenerateFormAsync(
+        string text, string lane, string tenantId, CancellationToken ct, string? userAgent)
+    {
+        try
+        {
+            return await intakeFormGenerator.GenerateAsync(text, lane, ct, userAgent);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Follow-up form could not be generated for an escalated request for Tenant: {TenantId}", tenantId);
+            return null;
+        }
     }
 
     private ChatMessageRequest Redact(ChatMessageRequest request, string tenantId)

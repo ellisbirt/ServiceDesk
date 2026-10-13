@@ -296,6 +296,8 @@ internal sealed class ProcessorRig : IAsyncDisposable
         services.AddSingleton<ISensitiveDataRedactor>(new SensitiveDataRedactor(Options.Create(new DlpOptions())));
         services.AddSingleton<IConversationSigner>(new ConversationSigner(
             Options.Create(new ConversationSigningOptions()), new DevEnvironment(), NullLogger<ConversationSigner>.Instance));
+        services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<EscalationTokens>();
         services.AddScoped<ChatPipeline>();
         _services = services.BuildServiceProvider();
 

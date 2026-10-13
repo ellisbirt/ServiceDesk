@@ -79,7 +79,7 @@ public sealed class OfflineIntakeFormGenerator : IIntakeFormGenerator
         Task.FromResult(new IntakeForm
         {
             Title = "Tell us more about your issue",
-            SubmitLabel = "Save details",
+            SubmitLabel = "Send to the service desk",
             Fields =
             [
                 new IntakeFormField

@@ -88,6 +88,15 @@ public interface IConversationSigner
     /// <summary>Builds a signed history from scratch (tests, tooling, evals). Roles are <c>user</c> or <c>assistant</c>.</summary>
     IReadOnlyList<ChatHistoryMessage> SignHistory(
         string tenantId, string userId, Guid conversationId, IEnumerable<(string Role, string Content)> messages);
+
+    /// <summary>
+    /// Signs <paramref name="payload"/> into an opaque token that only verifies for the same purpose, tenant, user and
+    /// conversation. The payload is readable by the client (it is signed, not encrypted), so it must not hold secrets.
+    /// </summary>
+    string SignToken(string purpose, string tenantId, string userId, Guid conversationId, string payload);
+
+    /// <summary>The payload of a token from <see cref="SignToken"/>, or null if it is malformed, forged or for someone else.</summary>
+    string? VerifyToken(string purpose, string tenantId, string userId, Guid conversationId, string? token);
 }
 
 public sealed partial class ConversationSigner : IConversationSigner
@@ -250,9 +259,39 @@ public sealed partial class ConversationSigner : IConversationSigner
         return bytes.Length == 32;
     }
 
+    // ----- Tokens: t1.<keyId>.<base64url payload>.<mac> -----
+
+    private const string TokenVersion = "t1";
+
+    public string SignToken(string purpose, string tenantId, string userId, Guid conversationId, string payload)
+    {
+        var mac = Compute(_keys[_activeKeyId], tenantId, userId, conversationId, 0, TokenVersion, purpose, payload);
+        return string.Join('.', TokenVersion, _activeKeyId,
+            WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(payload)), WebEncoders.Base64UrlEncode(mac));
+    }
+
+    public string? VerifyToken(string purpose, string tenantId, string userId, Guid conversationId, string? token)
+    {
+        if (token?.Split('.') is not [TokenVersion, var keyId, var body, var mac]) return null;
+        if (!_keys.TryGetValue(keyId, out var key) || !IsMac(mac, out var macBytes)) return null;
+
+        string payload;
+        try
+        {
+            payload = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(body));
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        var expected = Compute(key, tenantId, userId, conversationId, 0, TokenVersion, purpose, payload);
+        return CryptographicOperations.FixedTimeEquals(expected, macBytes) ? payload : null;
+    }
+
     /// <summary>
     /// HMAC-SHA256 over length-prefixed fields, so no value can be shifted into a neighbouring field. It covers who
     /// (tenant, user), which conversation, where in it (sequence and the previous message), and what was said.
+    /// Tokens reuse it with <c>previous</c> fixed to the token version, which no history signature can produce.
     /// </summary>
     private static byte[] Compute(
         byte[] key, string tenantId, string userId, Guid conversationId, long seq, string previous, string role, string content)

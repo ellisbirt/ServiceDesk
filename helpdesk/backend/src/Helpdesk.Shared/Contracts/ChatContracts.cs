@@ -99,6 +99,46 @@ public sealed record IntakeForm
     public required IReadOnlyList<IntakeFormField> Fields { get; init; }
 }
 
+/// <summary>
+/// Completes a pending escalation: the follow-up form's answers plus the <c>escalationToken</c> from the reply that
+/// asked for them. Only this request raises the ticket.
+/// </summary>
+public record EscalationRequest
+{
+    [JsonPropertyName("conversationId")]
+    public required Guid ConversationId { get; init; }
+
+    /// <summary>The <c>escalationToken</c> from the escalation reply's metadata.</summary>
+    [JsonPropertyName("escalationToken")]
+    public required string EscalationToken { get; init; }
+
+    [JsonPropertyName("formTitle")]
+    public required string FormTitle { get; init; }
+
+    [JsonPropertyName("answers")]
+    public IReadOnlyList<EscalationAnswer> Answers { get; init; } = [];
+}
+
+public record EscalationAnswer
+{
+    [JsonPropertyName("label")]
+    public required string Label { get; init; }
+
+    [JsonPropertyName("value")]
+    public required string Value { get; init; }
+}
+
+public record EscalationResponse
+{
+    /// <summary>The queued ticket event. Re-submitting the same token yields the same id.</summary>
+    [JsonPropertyName("ticketEventId")]
+    public required Guid TicketEventId { get; init; }
+
+    /// <summary>Always "queued": the ticket is created asynchronously.</summary>
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = "queued";
+}
+
 public sealed record IntakeFormField
 {
     public required string Id { get; init; }

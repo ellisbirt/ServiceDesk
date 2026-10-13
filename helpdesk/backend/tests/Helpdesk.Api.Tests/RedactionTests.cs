@@ -210,19 +210,23 @@ public class RedactionTests
         var res = await f.CreateClient().SendAsync(Request("VPN fails, password=hunter2"));
 
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        var evt = Assert.Single(f.Publisher.Sent);
+        Assert.Empty(f.Publisher.Sent);
+        var evt = new { SanitizedPayload = await PendingPayload(f, res) };
         Assert.Equal("VPN fails, password=[REDACTED:secret]", evt.SanitizedPayload);
     }
 
     [Fact]
-    public async Task PrivateCorp_Reply_TellsTheUserTheReferenceIsEmailed()
+    public async Task PrivateCorp_Reply_AsksTheUserToCompleteTheForm()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
         var body = await (await f.CreateClient().SendAsync(Request("VPN is down"))).Content.ReadFromJsonAsync<HelpdeskApiResponse>();
 
-        Assert.Contains("ticket reference by email", body!.ResponseText);
+        Assert.Contains("Complete the form", body!.ResponseText);
     }
+
+    private static async Task<string?> PendingPayload(ApiFactory f, HttpResponseMessage res) =>
+        f.PendingEscalation("dev-tenant", "dev-user", (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!)?.Payload;
 
     [Fact]
     public async Task Classifier_ReceivesRedactedMessageAndHistory()
@@ -266,13 +270,13 @@ public class RedactionTests
     {
         using var permissive = new ApiFactory();
         permissive.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        await permissive.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
-        Assert.Contains("bob@example.com", Assert.Single(permissive.Publisher.Sent).SanitizedPayload);
+        var permissiveRes = await permissive.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
+        Assert.Contains("bob@example.com", await PendingPayload(permissive, permissiveRes));
 
         using var strict = new ApiFactory(settings: new Dictionary<string, string> { ["Dlp:Destinations:Queue:Email"] = "Redact" });
         strict.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        await strict.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
-        Assert.DoesNotContain("bob@example.com", Assert.Single(strict.Publisher.Sent).SanitizedPayload);
+        var strictRes = await strict.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
+        Assert.DoesNotContain("bob@example.com", await PendingPayload(strict, strictRes));
     }
 
     [Fact]

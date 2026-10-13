@@ -41,10 +41,10 @@ describe('accessibility (axe)', () => {
           actionLane: 'PRIVATE_CORP',
           responseText: 'You need **approval** for that.',
           actionCardRequired: false,
-          metadata: {},
+          metadata: { escalationToken: 't1.k.p.m' },
           intakeForm: {
             title: 'Laptop details',
-            submitLabel: 'Save details',
+            submitLabel: 'Send to the service desk',
             fields: [
               {
                 id: 'model',

@@ -153,7 +153,6 @@ public class ChatHubTests
         Assert.Equal(ChatEventTypes.Completed, events[^1].Type);
         Assert.Equal("HubBrowser/4.2", f.Router.LastUserAgent);
         Assert.Equal("HubBrowser/4.2", f.Inference.LastUserAgent);
-        Assert.Equal("HubBrowser/4.2", f.FormGenerator.LastUserAgent);
     }
 
     [Fact]
@@ -360,7 +359,7 @@ public class ChatHubTests
     }
 
     [Fact]
-    public async Task PrivateCorp_IsQueuedWithTenantAndUser_FromTheConnection()
+    public async Task PrivateCorp_WaitsForTheForm_WithATokenBoundToTheConnectionsTenantAndUser()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
@@ -370,8 +369,11 @@ public class ChatHubTests
         var events = await client.UntilTerminalAsync();
 
         Assert.Equal(ChatEventTypes.Completed, events[^1].Type);
-        var sent = Assert.Single(f.Publisher.Sent);
-        Assert.Equal(("tenant-z", "alice"), (sent.TenantId, sent.UserId));
+        Assert.Empty(f.Publisher.Sent);
+        var reply = events[^1].Response!;
+        Assert.NotNull(reply.IntakeForm);
+        Assert.Equal("vpn is down", f.PendingEscalation("tenant-z", "alice", reply)!.Payload);
+        Assert.Null(f.PendingEscalation("tenant-z", "bob", reply));
     }
 
     [Fact]

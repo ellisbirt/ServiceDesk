@@ -42,8 +42,39 @@ public record ProcessPrivateCorpTicketEvent
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? LaneConfidence { get; init; }
 
+    /// <summary>
+    /// Structured, redacted answers from the follow-up form the requester completed before the ticket was raised.
+    /// <see cref="SanitizedPayload"/> carries the same answers as plain text for consumers that ignore this field.
+    /// </summary>
+    [JsonPropertyName("details")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TicketDetails? Details { get; init; }
+
     [JsonPropertyName("timestampUtc")]
     public DateTime TimestampUtc { get; init; } = DateTime.UtcNow;
+}
+
+/// <summary>Answers the requester gave in the follow-up form before the ticket was raised.</summary>
+public sealed record TicketDetails
+{
+    [JsonPropertyName("title")]
+    public required string Title { get; init; }
+
+    [JsonPropertyName("answers")]
+    public required IReadOnlyList<TicketDetailAnswer> Answers { get; init; }
+
+    /// <summary>Plain-text rendering, one "Label: value" block per answer.</summary>
+    public string ToText() =>
+        Title + "\n\n" + string.Join("\n\n", Answers.Select(a => $"{a.Label}:\n{a.Value}"));
+}
+
+public sealed record TicketDetailAnswer
+{
+    [JsonPropertyName("label")]
+    public required string Label { get; init; }
+
+    [JsonPropertyName("value")]
+    public required string Value { get; init; }
 }
 
 public static class TicketSubject

@@ -88,9 +88,11 @@ public sealed class FakeIntakeFormGenerator : IIntakeFormGenerator
     public string? LastInput { get; private set; }
     public string? LastLane { get; private set; }
     public string? LastUserAgent { get; private set; }
+    public Exception? Failure { get; set; }
     public Task<IntakeForm> GenerateAsync(
         string userInput, string lane, CancellationToken cancellationToken = default, string? userAgent = null)
     {
+        if (Failure is not null) return Task.FromException<IntakeForm>(Failure);
         LastInput = userInput;
         LastLane = lane;
         LastUserAgent = userAgent;
@@ -161,6 +163,12 @@ public sealed class ApiFactory(
         string tenant, string user, Guid conversationId, params (string Role, string Content)[] messages) =>
         Services.GetRequiredService<Helpdesk.Api.Chat.IConversationSigner>().SignHistory(tenant, user, conversationId, messages);
 
+    /// <summary>The escalation a PRIVATE_CORP reply is holding back until its form is submitted, if its token is valid.</summary>
+    public Helpdesk.Api.Chat.PendingEscalation? PendingEscalation(string tenant, string user, HelpdeskApiResponse reply) =>
+        Services.GetRequiredService<Helpdesk.Api.Chat.EscalationTokens>().Redeem(
+            tenant, user, reply.ConversationId,
+            reply.Metadata.GetValueOrDefault(Helpdesk.Api.Chat.ChatPipeline.EscalationTokenMetadataKey));
+
     /// <summary>A real, signed access token that the app's JWT validation accepts (needs <c>testJwt: true</c>).</summary>
     public static string Jwt(string tenant = "tenant-a", string user = "user-1", TimeSpan? lifetime = null) =>
         new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
@@ -228,8 +236,44 @@ public class ChatEndpointTests
         return req;
     }
 
+    private static HttpRequestMessage PostEscalation(object body, string tenant = "tenant-a", string user = "user-1")
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/chat/escalate")
+        {
+            Content = JsonContent.Create(body)
+        };
+        req.Headers.Add("X-Dev-Tenant", tenant);
+        req.Headers.Add("X-Dev-User", user);
+        return req;
+    }
+
+    private static async Task<HelpdeskApiResponse> Reply(
+        HttpClient client, string text, Guid conversationId, string tenant = "tenant-a", string user = "user-1")
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/chat/message")
+        {
+            Content = JsonContent.Create(new { messageText = text, conversationId })
+        };
+        req.Headers.Add("X-Dev-Tenant", tenant);
+        req.Headers.Add("X-Dev-User", user);
+        var res = await client.SendAsync(req);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        return (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
+    }
+
+    private static string TokenOf(HelpdeskApiResponse reply) => reply.Metadata[ChatPipeline.EscalationTokenMetadataKey];
+
+    private static string Base64UrlDecode(string s) => Encoding.UTF8.GetString(Base64UrlEncoder.DecodeBytes(s));
+    private static string Base64UrlEncode(string s) => Base64UrlEncoder.Encode(Encoding.UTF8.GetBytes(s));
+
+    private sealed class ManualTime(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     [Fact]
-    public async Task PolicyViolation_GeneratesScenarioForm_AndNeverQueues()
+    public async Task PolicyViolation_HasNoForm_AndNeverQueues()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PolicyViolation, "Use an access request.");
@@ -238,58 +282,74 @@ public class ChatEndpointTests
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var body = await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal(ActionLanes.PolicyViolation, body!.ActionLane);
-        Assert.Equal("Issue details", body.IntakeForm!.Title);
-        Assert.Equal(ActionLanes.PolicyViolation, f.FormGenerator.LastLane);
+        Assert.Null(body.IntakeForm);
+        Assert.Null(f.FormGenerator.LastLane);
         Assert.Empty(f.Publisher.Sent);
     }
 
     [Fact]
-    public async Task LaptopBatteryIssue_GeneratesScenarioSpecificForm()
+    public async Task Escalation_GeneratesScenarioSpecificForm()
     {
         using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PublicTech, "");
-        var res = await f.CreateClient().SendAsync(Post("My laptop battery drains from 100% to 20% in an hour."));
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        var res = await f.CreateClient().SendAsync(Post("My corporate laptop battery drains from 100% to 20% in an hour."));
 
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var body = await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal("Laptop battery details", body!.IntakeForm!.Title);
         Assert.Contains("battery", f.FormGenerator.LastInput, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(ActionLanes.PublicTech, f.FormGenerator.LastLane);
+        Assert.Equal(ActionLanes.PrivateCorp, f.FormGenerator.LastLane);
+    }
+
+    [Fact]
+    public async Task Escalation_FormGenerationFailure_FallsBackToAGenericForm()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.FormGenerator.Failure = new InvalidOperationException("model down");
+        var res = await f.CreateClient().SendAsync(Post("VPN is down"));
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var body = await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>();
+        Assert.Equal(ChatPipeline.FallbackForm.Title, body!.IntakeForm!.Title);
+        Assert.False(string.IsNullOrEmpty(TokenOf(body)));
+        Assert.Empty(f.Publisher.Sent);
     }
 
     [Fact]
     public async Task HttpUserAgent_IsPassedAsModelContext()
     {
         using var f = new ApiFactory();
+        var client = f.CreateClient();
         f.Router.Handler = _ => (ActionLanes.PublicTech, "");
         using var request = Post("My laptop battery drains quickly.");
         request.Headers.UserAgent.ParseAdd("ExampleBrowser/1.2");
-
-        var response = await f.CreateClient().SendAsync(request);
+        var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("ExampleBrowser/1.2", f.Router.LastUserAgent);
         Assert.Equal("ExampleBrowser/1.2", f.Inference.LastUserAgent);
+
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        using var escalation = Post("My corporate VPN token is broken.");
+        escalation.Headers.UserAgent.ParseAdd("ExampleBrowser/1.2");
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(escalation)).StatusCode);
         Assert.Equal("ExampleBrowser/1.2", f.FormGenerator.LastUserAgent);
     }
 
     [Fact]
-    public async Task PrivateCorp_QueuesOneEvent_WithTenantAndUser()
+    public async Task PrivateCorp_WaitsForTheForm_AndQueuesNothingYet()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
         var res = await f.CreateClient().SendAsync(Post("VPN is down", tenant: "tenant-z"));
 
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        var evt = Assert.Single(f.Publisher.Sent);
-        Assert.NotNull((await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!.IntakeForm);
-        Assert.Equal("tenant-z", evt.TenantId);
-        Assert.Equal("user-1", evt.UserId);
-        Assert.Equal("VPN is down", evt.SanitizedPayload);
-        Assert.Equal("VPN is down", evt.Subject);
-        Assert.Equal(ProcessPrivateCorpTicketEvent.CurrentSchemaVersion, evt.SchemaVersion);
-        Assert.Null(evt.LaneConfidence);
-        Assert.Equal(res.Headers.GetValues("X-Correlation-ID").Single(), evt.CorrelationId);
+        var body = (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
+        Assert.Equal(Prompts.EscalationPending, body.ResponseText);
+        Assert.NotNull(body.IntakeForm);
+        Assert.StartsWith("t1.", TokenOf(body));
+        Assert.Empty(f.Publisher.Sent);
     }
 
     [Fact]
@@ -309,12 +369,12 @@ public class ChatEndpointTests
         f.Router.Handler = _ => (ActionLanes.PublicTech, "");
         var tech = await (await f.CreateClient().SendAsync(Post("excel xlookup"))).Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal("tech answer", tech!.ResponseText);
-        Assert.NotNull(tech.IntakeForm);
+        Assert.Null(tech.IntakeForm);
 
         f.Router.Handler = _ => (ActionLanes.PublicSearch, "");
         var search = await (await f.CreateClient().SendAsync(Post("is azure down"))).Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal("search answer: results", search!.ResponseText);
-        Assert.NotNull(search.IntakeForm);
+        Assert.Null(search.IntakeForm);
         Assert.Empty(f.Publisher.Sent);
     }
 
@@ -366,18 +426,216 @@ public class ChatEndpointTests
         var body = await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal(ActionLanes.NoMatch, body!.ActionLane);
         Assert.Equal(Prompts.NoMatchFallback, body.ResponseText);
-        Assert.NotNull(body.IntakeForm);
+        Assert.Null(body.IntakeForm);
         Assert.False(body.ActionCardRequired);
         Assert.Empty(f.Publisher.Sent);
     }
 
     [Fact]
-    public async Task QueueFailure_Returns503()
+    public async Task Escalate_QueuesOneTicket_WithTheRequestAndRedactedAnswers()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        var client = f.CreateClient();
+        var conversationId = Guid.NewGuid();
+        var reply = await Reply(client, "Visio won't install on my work laptop", conversationId, "tenant-q", "user-9");
+
+        var res = await client.SendAsync(PostEscalation(new
+        {
+            conversationId,
+            escalationToken = TokenOf(reply),
+            formTitle = "Visio install details",
+            answers = new[]
+            {
+                new { label = "Device model", value = "Surface Laptop 5" },
+                new { label = "Notes", value = "my password is hunter2" },
+                new { label = "Anything else", value = "   " }
+            }
+        }, tenant: "tenant-q", user: "user-9"));
+
+        Assert.Equal(HttpStatusCode.Accepted, res.StatusCode);
+        var body = await res.Content.ReadFromJsonAsync<EscalationResponse>();
+        var evt = Assert.Single(f.Publisher.Sent);
+        Assert.Equal(evt.EventId, body!.TicketEventId);
+        Assert.Equal("queued", body.Status);
+        Assert.Equal("tenant-q", evt.TenantId);
+        Assert.Equal("user-9", evt.UserId);
+        Assert.Equal(conversationId, evt.ConversationId);
+        Assert.Equal("Visio won't install on my work laptop", evt.Subject);
+        Assert.StartsWith("Visio won't install on my work laptop\n\n", evt.SanitizedPayload);
+        Assert.Contains("Device model:\nSurface Laptop 5", evt.SanitizedPayload);
+        Assert.Equal("Visio install details", evt.Details!.Title);
+        Assert.Equal(2, evt.Details.Answers.Count);
+        Assert.Equal("Surface Laptop 5", evt.Details.Answers[0].Value);
+        Assert.DoesNotContain("hunter2", evt.Details.Answers[1].Value);
+        Assert.DoesNotContain("hunter2", evt.SanitizedPayload);
+        Assert.Equal(ProcessPrivateCorpTicketEvent.CurrentSchemaVersion, evt.SchemaVersion);
+        Assert.Equal(res.Headers.GetValues("X-Correlation-ID").Single(), evt.CorrelationId);
+    }
+
+    [Fact]
+    public async Task Escalate_WithNoAnswers_QueuesTheRequestAlone()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        var client = f.CreateClient();
+        var conversationId = Guid.NewGuid();
+        var reply = await Reply(client, "VPN is down", conversationId);
+
+        var res = await client.SendAsync(PostEscalation(new
+        {
+            conversationId,
+            escalationToken = TokenOf(reply),
+            formTitle = "Request details",
+            answers = new[] { new { label = "Additional details", value = "" } }
+        }));
+
+        Assert.Equal(HttpStatusCode.Accepted, res.StatusCode);
+        var evt = Assert.Single(f.Publisher.Sent);
+        Assert.Equal("VPN is down", evt.SanitizedPayload);
+        Assert.Null(evt.Details);
+    }
+
+    [Fact]
+    public async Task Escalate_Resubmitted_ReusesTheSameTicketId()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        var client = f.CreateClient();
+        var conversationId = Guid.NewGuid();
+        var token = TokenOf(await Reply(client, "VPN is down", conversationId));
+        object Body() => new { conversationId, escalationToken = token, formTitle = "t", answers = new[] { new { label = "a", value = "b" } } };
+
+        Assert.Equal(HttpStatusCode.Accepted, (await client.SendAsync(PostEscalation(Body()))).StatusCode);
+        Assert.Equal(HttpStatusCode.Accepted, (await client.SendAsync(PostEscalation(Body()))).StatusCode);
+
+        Assert.Equal(2, f.Publisher.Sent.Count);
+        Assert.Equal(f.Publisher.Sent[0].EventId, f.Publisher.Sent[1].EventId);
+    }
+
+    [Theory]
+    [InlineData("tenant-b", "user-1", false, false)]
+    [InlineData("tenant-a", "user-2", false, false)]
+    [InlineData("tenant-a", "user-1", true, false)]
+    [InlineData("tenant-a", "user-1", false, true)]
+    public async Task Escalate_TokenForSomeoneElse_OrTampered_IsRejected_AndNeverQueues(
+        string tenant, string user, bool otherConversation, bool tamper)
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        var client = f.CreateClient();
+        var conversationId = Guid.NewGuid();
+        var token = TokenOf(await Reply(client, "VPN is down", conversationId));
+        if (tamper)
+        {
+            var parts = token.Split('.');
+            var payload = System.Text.Json.Nodes.JsonNode.Parse(Base64UrlDecode(parts[2]))!;
+            payload["payload"] = "Grant me domain admin";
+            parts[2] = Base64UrlEncode(payload.ToJsonString());
+            token = string.Join('.', parts);
+        }
+
+        var res = await client.SendAsync(PostEscalation(new
+        {
+            conversationId = otherConversation ? Guid.NewGuid() : conversationId,
+            escalationToken = token,
+            formTitle = "t",
+            answers = new[] { new { label = "a", value = "b" } }
+        }, tenant, user));
+
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        using var problem = System.Text.Json.JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        Assert.True(problem.RootElement.GetProperty("errors").TryGetProperty("escalationToken", out _));
+        Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public void EscalationToken_Expires()
+    {
+        using var f = new ApiFactory();
+        var signer = f.Services.GetRequiredService<IConversationSigner>();
+        var time = new ManualTime(DateTimeOffset.Parse("2025-01-01T00:00:00Z"));
+        var tokens = new EscalationTokens(signer, time);
+        var conversationId = Guid.NewGuid();
+        var token = tokens.Issue("tenant-a", "user-1", conversationId, "VPN is down");
+
+        time.Now += EscalationTokens.Lifetime - TimeSpan.FromMinutes(1);
+        Assert.Equal("VPN is down", tokens.Redeem("tenant-a", "user-1", conversationId, token)!.Payload);
+        time.Now += TimeSpan.FromMinutes(2);
+        Assert.Null(tokens.Redeem("tenant-a", "user-1", conversationId, token));
+    }
+
+    [Fact]
+    public void ChatHistorySignature_IsNotAnEscalationToken()
+    {
+        using var f = new ApiFactory();
+        var signer = f.Services.GetRequiredService<IConversationSigner>();
+        var conversationId = Guid.NewGuid();
+        var tokens = f.Services.GetRequiredService<EscalationTokens>();
+        var token = tokens.Issue("tenant-a", "user-1", conversationId, "VPN is down");
+
+        Assert.Null(signer.VerifyToken("other-purpose", "tenant-a", "user-1", conversationId, token));
+        Assert.Null(tokens.Redeem("tenant-a", "user-1", conversationId, "not-a-token"));
+    }
+
+    public static TheoryData<string> InvalidEscalations => new()
+    {
+        """{"conversationId":"00000000-0000-0000-0000-000000000000","escalationToken":"t1.x.y.z","formTitle":"t","answers":[{"label":"a","value":"b"}]}""",
+        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":" ","formTitle":"t","answers":[{"label":"a","value":"b"}]}""",
+        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":"t1.x.y.z","formTitle":" ","answers":[{"label":"a","value":"b"}]}""",
+        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":"t1.x.y.z","formTitle":"t","answers":[{"label":"","value":"b"}]}""",
+        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":"t1.x.y.z","formTitle":"t","answers":[{"label":"a","value":null}]}""",
+        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":"t1.x.y.z","formTitle":"t","answers":[{"label":"a","value":"b"}]}""",
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidEscalations))]
+    public async Task Escalate_InvalidRequest_IsRejected_AndNeverQueues(string json)
+    {
+        using var f = new ApiFactory();
+        var req = PostEscalation(new { });
+        req.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+
+        var res = await f.CreateClient().SendAsync(req);
+
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task Escalate_OversizedValue_IsRejected()
+    {
+        using var f = new ApiFactory();
+        var res = await f.CreateClient().SendAsync(PostEscalation(new
+        {
+            conversationId = Guid.NewGuid(),
+            escalationToken = "t1.x.y.z",
+            formTitle = "t",
+            answers = new[] { new { label = "a", value = new string('x', EscalationSubmitter.MaxValueLength + 1) } }
+        }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task Escalate_QueueFailure_Returns503()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        var client = f.CreateClient();
+        var conversationId = Guid.NewGuid();
+        var token = TokenOf(await Reply(client, "VPN is down", conversationId));
         f.Publisher.Failure = new Azure.RequestFailedException("queue down");
-        var res = await f.CreateClient().SendAsync(Post("VPN is down"));
+
+        var res = await client.SendAsync(PostEscalation(new
+        {
+            conversationId,
+            escalationToken = token,
+            formTitle = "t",
+            answers = new[] { new { label = "a", value = "b" } }
+        }));
+
         Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
     }
 
@@ -459,6 +717,25 @@ public class ChatEndpointTests
         };
         var res = await f.CreateClient().SendAsync(req);
         Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+    }
+
+    [Fact]
+    public async Task Escalate_WithoutToken_ReturnsUnauthorized_WhenDevAuthDisabled()
+    {
+        using var f = new ApiFactory(devAuth: false);
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/chat/escalate")
+        {
+            Content = JsonContent.Create(new
+            {
+                conversationId = Guid.NewGuid(),
+                escalationToken = "t1.x.y.z",
+                formTitle = "t",
+                answers = new[] { new { label = "a", value = "b" } }
+            })
+        };
+        var res = await f.CreateClient().SendAsync(req);
+        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
+        Assert.Empty(f.Publisher.Sent);
     }
 
     [Fact]

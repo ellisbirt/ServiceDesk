@@ -56,6 +56,31 @@ public static class ChatEndpointRouteBuilderExtensions
         .RequireAuthorization()
         .RequireRateLimiting("chat");
 
+        // Raises the ticket for a pending escalation, once its follow-up form is complete.
+        endpoints.MapPost("/api/v1/chat/escalate", async (
+            EscalationRequest request,
+            ITenantProvider tenantProvider,
+            EscalationSubmitter submitter,
+            CancellationToken ct) =>
+        {
+            if (EscalationSubmitter.Validate(request) is { } errors)
+            {
+                return Results.ValidationProblem(errors);
+            }
+
+            string tenantId = tenantProvider.GetCurrentTenantId();
+            string userId = tenantProvider.GetCurrentUserId();
+            return await submitter.SubmitAsync(request, tenantId, userId, ct) is { } accepted
+                ? Results.Accepted(value: accepted)
+                : Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["escalationToken"] = ["This request has expired or is not valid. Please send your message again."]
+                });
+        })
+        .WithName("PostEscalation")
+        .RequireAuthorization()
+        .RequireRateLimiting("chat");
+
         return endpoints;
     }
 }
