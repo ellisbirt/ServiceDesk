@@ -1,0 +1,5 @@
+﻿root = true
+
+[*.cs]
+# Pass the caller's CancellationToken on to every call that accepts one.
+dotnet_diagnostic.CA2016.severity = warning

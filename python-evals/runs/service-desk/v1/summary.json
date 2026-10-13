@@ -1,0 +1,4 @@
+{
+  "target": "system_prompt",
+  "description": "Ask one clarifying question before guessing; keep replies under 120 words"
+}

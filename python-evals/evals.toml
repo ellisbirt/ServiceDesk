@@ -1,0 +1,56 @@
+# promptevals configuration. Paths are relative to this file.
+
+[paths]
+system_prompt = "../evals/system-prompt.md"
+cases = "../evals/cases.json"
+rubric = "../evals/rubric.md"
+runs_dir = "runs"
+flow = "service-desk"
+
+[target]
+# The system under test. Defaults to Claude; providers: anthropic, openai, grok,
+# microsoft (alias: azure_openai), ollama, lm_studio. Set provider independently
+# for target, judge, and generator as needed.
+# OpenAI-compatible providers accept endpoint and api_key_env overrides.
+# Azure OpenAI uses endpoint + api_version; model is the deployment name.
+# Ollama defaults to http://localhost:11434/v1; LM Studio to http://localhost:1234/v1.
+# To exercise your real app instead, point `entrypoint` at a function - see README.
+provider = "anthropic"
+model = "claude-opus-5-5"
+max_tokens = 16000
+effort = "medium"              # low | medium | high | xhigh | max (omit for Haiku 4.5)
+# thinking_display = "summarized"   # record a thinking summary in traces
+# fallbacks = "default"             # mirror production if your app uses refusal fallbacks
+# entrypoint = "my_app.chat:respond"
+
+[judge]
+# Model used by LLM graders. Avoid using the exact model under test as its own judge.
+provider = "anthropic"
+model = "claude-sonnet-5-5"
+max_tokens = 8000
+effort = "medium"
+
+[generator]
+# Model used by `promptevals generate` to propose new test cases.
+provider = "anthropic"
+model = "claude-opus-5-5"
+max_tokens = 32000
+effort = "high"
+
+[run]
+reps = 1
+concurrency = 8
+timeout_s = 240        # hard per-case wall-clock ceiling (sampling + grading)
+max_attempts = 4       # API attempts per call, jittered exponential backoff
+
+[grading]
+# Graders applied to every case:
+#   code      - deterministic checks from each case's `checks` list (free)
+#   checklist - LLM judge verifies each `must` / `must_not` item atomically
+#   rubric    - LLM judge scores the response against rubric.md
+#   pairwise  - LLM judge compares against a frozen reference variant's output
+graders = ["code", "checklist", "rubric"]
+checklist_mode = "batched"     # batched (one call per case) | per_item (one call per item)
+rubric_max = 10
+rubric_pass_threshold = 8
+pairwise_reference = "baseline"

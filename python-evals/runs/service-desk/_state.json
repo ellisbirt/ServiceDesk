@@ -1,0 +1,58 @@
+{
+  "metrics": [
+    {
+      "id": "pass",
+      "label": "Pass",
+      "kind": "binary"
+    },
+    {
+      "id": "checks",
+      "label": "Code checks",
+      "kind": "float",
+      "scale": 1
+    },
+    {
+      "id": "must",
+      "label": "Must items",
+      "kind": "float",
+      "scale": 1
+    },
+    {
+      "id": "must_not_ok",
+      "label": "No must_not",
+      "kind": "binary"
+    },
+    {
+      "id": "rubric",
+      "label": "Rubric",
+      "kind": "judge",
+      "scale": 10.0
+    },
+    {
+      "id": "refusal",
+      "label": "Refused",
+      "kind": "binary",
+      "better": "lower"
+    }
+  ],
+  "perf_fields": [
+    {
+      "id": "cost_usd",
+      "label": "Cost",
+      "unit": "$"
+    },
+    {
+      "id": "in_tokens",
+      "label": "In tok"
+    },
+    {
+      "id": "out_tokens",
+      "label": "Out tok"
+    },
+    {
+      "id": "latency_s",
+      "label": "Latency",
+      "unit": "s"
+    }
+  ]
+}
