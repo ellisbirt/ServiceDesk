@@ -49,6 +49,7 @@ public sealed class AnthropicChatProvider(HttpClient http, LlmProviderOptions op
         var sources = new Dictionary<string, string>(StringComparer.Ordinal);
         var totalUsage = TokenUsage.Empty;
         var hasUsage = false;
+        string? lastStopReason = null;
         try
         {
             for (var turn = 0; turn <= MaxPauseContinuations; turn++)
@@ -59,6 +60,7 @@ public sealed class AnthropicChatProvider(HttpClient http, LlmProviderOptions op
                     : await SendTurnAsync(body, progress, ct);
                 totalUsage = totalUsage.Add(usage);
                 hasUsage = true;
+                lastStopReason = stopReason;
 
                 foreach (var block in content)
                 {
@@ -75,6 +77,9 @@ public sealed class AnthropicChatProvider(HttpClient http, LlmProviderOptions op
                 if (stopReason != "pause_turn") break;
                 messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = content.DeepClone() });
             }
+
+            // A refusal can arrive with part of an answer, which would read as a complete reply if returned.
+            if (lastStopReason == "refusal") throw new LlmRefusalException("The model declined to answer.");
 
             if (text.Length == 0)
             {

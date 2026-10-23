@@ -22,6 +22,12 @@ public class UpstreamRateLimitedException(TimeSpan? retryAfter, string message, 
     public TimeSpan? RetryAfter { get; } = retryAfter;
 }
 
+/// <summary>
+/// The model declined to answer (Anthropic <c>stop_reason: refusal</c>). Any text it produced first is incomplete and
+/// must not be shown as a reply.
+/// </summary>
+public sealed class LlmRefusalException(string message) : Exception(message);
+
 /// <summary>The provider cannot honour a request feature (for example native web search on a non-Anthropic model).</summary>
 public sealed class LlmCapabilityException(string message) : Exception(message);
 

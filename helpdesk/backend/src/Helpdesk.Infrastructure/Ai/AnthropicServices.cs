@@ -85,21 +85,40 @@ public sealed class AnthropicGuardrailRouterService(
             return (lane, string.Empty);
         }
 
-        try
+        return (lane, await CoachAsync(userInput, cancellationToken, progress, userAgent));
+    }
+
+    private const int CoachAttempts = 2;
+
+    public async Task<string> CoachAsync(
+        string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null)
+    {
+        // Refusals are intermittent (the same request is often answered on the next attempt), so try once more.
+        for (var attempt = 1; attempt <= CoachAttempts; attempt++)
         {
-            var coaching = await client.CompleteAsync(
-                new ChatRequest(
-                    Prompts.ComplianceCoach, PromptInput.WithUserAgent(PromptInput.Wrap("user_query", userInput), userAgent),
-                    _options.CoachTemperature, _options.InferenceMaxTokens),
-                progress, cancellationToken);
-            return (lane, coaching.Trim());
+            try
+            {
+                var coaching = await client.CompleteAsync(
+                    new ChatRequest(
+                        Prompts.ComplianceCoach, PromptInput.WithUserAgent(PromptInput.Wrap("user_query", userInput), userAgent),
+                        _options.CoachTemperature, _options.InferenceMaxTokens),
+                    progress, cancellationToken);
+                return coaching.Trim();
+            }
+            catch (LlmRefusalException)
+            {
+                logger.LogWarning("Compliance coach call was refused (attempt {Attempt} of {Attempts}).", attempt, CoachAttempts);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The block itself is already decided; a coach failure must not weaken it.
+                logger.LogError(ex, "Compliance coach call failed; using static remediation text.");
+                return Prompts.ComplianceFallback;
+            }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // The block itself is already decided; a coach failure must not weaken it.
-            logger.LogError(ex, "Compliance coach call failed; using static remediation text.");
-            return (lane, Prompts.ComplianceFallback);
-        }
+
+        // Still declined: the static text explains the right way to go about it.
+        return Prompts.ComplianceFallback;
     }
 
     private async Task<string> ClassifyAsync(
@@ -117,6 +136,12 @@ public sealed class AnthropicGuardrailRouterService(
                         userAgent),
                     0.0, _options.RouterMaxTokens, ResponseSchema: ClassifierSchema),
                 progress, ct);
+        }
+        catch (LlmRefusalException)
+        {
+            // A model that will not even classify the request is treated as having blocked it.
+            Telemetry.PrefilterBlocks.Add(1, new KeyValuePair<string, object?>("rule", "model-refusal"));
+            return ActionLanes.PolicyViolation;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -201,6 +226,7 @@ public sealed class AnthropicPublicInferenceService(
     }
 
     /// <summary>Streams the reply when a progress sink is supplied, otherwise returns it in one response.</summary>
+    // A refusal (LlmRefusalException) is left to the pipeline, which answers with educational guidance instead.
     private Task<string> ReplyAsync(
         string system, string user, JsonArray? tools, IChatProgress? progress, CancellationToken ct) =>
         progress is null

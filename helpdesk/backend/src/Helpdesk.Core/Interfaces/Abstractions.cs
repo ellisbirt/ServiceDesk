@@ -9,7 +9,7 @@ public interface ITenantProvider
     string GetCurrentUserId();
 }
 
-public interface IGuardrailRouterService
+public interface IGuardrailRouterService : IGuardrailCoach
 {
     /// <summary>
     /// Returns an action lane (POLICY_VIOLATION, PUBLIC_TECH, PUBLIC_SEARCH, PRIVATE_CORP or NO_MATCH).
@@ -20,6 +20,16 @@ public interface IGuardrailRouterService
     Task<(string Lane, string ResponseContext)> ClassifyAndValidateAsync(
         string userInput, string tenantId, IReadOnlyList<ChatHistoryMessage>? conversationHistory = null,
         CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null);
+}
+
+public interface IGuardrailCoach
+{
+    /// <summary>
+    /// Educational guidance on the correct way to go about a request. Used for requests the rules do not allow and
+    /// when the main model declines to engage. Never throws for a model failure or refusal: it falls back to static text.
+    /// </summary>
+    Task<string> CoachAsync(
+        string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null);
 }
 
 public interface IPublicInferenceService

@@ -43,7 +43,7 @@ public sealed class AnthropicTicketInterviewer(IChatProvider client, IOptions<An
                 cancellationToken: cancellationToken);
             return Parse(raw);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException and not TicketInterviewException)
+        catch (Exception ex) when (ex is not OperationCanceledException and not TicketInterviewException and not LlmRefusalException)
         {
             throw new TicketInterviewException("The ticket interview could not be completed.", ex);
         }

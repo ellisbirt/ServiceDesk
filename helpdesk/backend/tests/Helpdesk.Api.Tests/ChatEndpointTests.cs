@@ -37,6 +37,15 @@ public sealed class FakeRouter : IGuardrailRouterService
     public Func<string, (string, string)> Handler { get; set; } = _ => ("PUBLIC_TECH", "");
     public IReadOnlyList<ChatHistoryMessage>? LastHistory { get; private set; }
     public string? LastUserAgent { get; private set; }
+    public string CoachText { get; set; } = "coach guidance";
+    public List<string> Coached { get; } = [];
+    public Task<string> CoachAsync(
+        string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null)
+    {
+        Coached.Add(userInput);
+        return Task.FromResult(CoachText);
+    }
+
     public Task<(string Lane, string ResponseContext)> ClassifyAndValidateAsync(
         string userInput, string tenantId, IReadOnlyList<ChatHistoryMessage>? conversationHistory = null,
         CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null)
@@ -50,6 +59,7 @@ public sealed class FakeRouter : IGuardrailRouterService
 public sealed class FakeInference : IPublicInferenceService
 {
     public Func<IChatProgress?, CancellationToken, Task>? OnReply { get; set; }
+    public Exception? Failure { get; set; }
 
     /// <summary>Every question the model was asked, in order, so a test can see what did and did not run.</summary>
     public System.Collections.Concurrent.ConcurrentQueue<string> Inputs { get; } = new();
@@ -63,6 +73,7 @@ public sealed class FakeInference : IPublicInferenceService
         IReadOnlyList<ChatHistoryMessage>? conversationHistory = null, IReadOnlyList<KbHit>? knowledgeBase = null)
     {
         Inputs.Enqueue(userInput);
+        if (Failure is not null) throw Failure;
         LastUserAgent = userAgent;
         LastHistory = conversationHistory;
         LastKnowledgeBase = knowledgeBase;
@@ -73,6 +84,7 @@ public sealed class FakeInference : IPublicInferenceService
     public Task<string> ExecuteSearchInferenceAsync(string userInput, string ctx, CancellationToken ct = default,
         IChatProgress? progress = null, string? userAgent = null, IReadOnlyList<KbHit>? knowledgeBase = null)
     {
+        if (Failure is not null) return Task.FromException<string>(Failure);
         LastUserAgent = userAgent;
         LastKnowledgeBase = knowledgeBase;
         return Task.FromResult($"search answer: {ctx}");

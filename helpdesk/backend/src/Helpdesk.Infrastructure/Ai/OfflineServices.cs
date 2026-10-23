@@ -27,6 +27,10 @@ public sealed partial class OfflineGuardrailRouterService(ILogger<OfflineGuardra
     [GeneratedRegex(@"\b(code|coding|programming|script|python|javascript|typescript|linux|windows|macos|outlook|excel|word|powerpoint|operating system|software|application|install|configure|configuration|compile|debug|error message|stack trace|api|database|sql|git|terminal|command line|dotnet|laptop|desktop|computer|phone|tablet|battery|charging|charger|overheating|screen|monitor|display|audio|microphone|speakers?|headphones?|webcam|keyboard|mouse|touchpad|wi[- ]?fi|internet|bluetooth|browser|email|teams|zoom|disk|storage|log\s*in|sign[- ]?in|mfa|2fa|phishing|malware|antivirus|firewall)\b|\b(?:my (?:own )?(?:account|password)|(?:incorrect|forgotten|reset|recover|forgot) password|password (?:is )?(?:incorrect|wrong|reset|recovery)|account (?:locked|lockout|recovery))\b|c\#(?=\W|$)|\.net\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
     private static partial Regex PublicTechRegex();
 
+    public Task<string> CoachAsync(
+        string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null) =>
+        Task.FromResult(Prompts.ComplianceFallback);
+
     public Task<(string Lane, string ResponseContext)> ClassifyAndValidateAsync(
         string userInput, string tenantId, IReadOnlyList<ChatHistoryMessage>? conversationHistory = null,
         CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null)

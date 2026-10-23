@@ -75,6 +75,8 @@ public sealed class ChatPipeline(
 
         HelpdeskApiResponse response;
         IReadOnlyList<KbHit> kbHits = [];
+        try
+        {
         switch (lane.ToUpperInvariant())
         {
             case ActionLanes.NoMatch:
@@ -114,6 +116,16 @@ public sealed class ChatPipeline(
             default:
                 logger.LogError("Guardrail returned unsupported lane {Lane}", lane);
                 throw new UnsupportedLaneException(lane);
+        }
+        }
+        catch (LlmRefusalException)
+        {
+            // The model declined this request. The user still gets educational guidance on the right way to go about
+            // it (a reframed request, then static text), and nothing is queued.
+            logger.LogWarning("The model declined a {Lane} request for Tenant: {TenantId}; giving guidance instead", lane, tenantId);
+            kbHits = [];
+            response = Reply(request, ActionLanes.PolicyViolation,
+                await guardrailService.CoachAsync(request.MessageText, ct, progress, userAgent));
         }
 
         if (kbHits.Count > 0) response.Metadata[KnowledgeBaseMetadataKey] = string.Join(",", kbHits.Select(h => h.Number));
