@@ -31,7 +31,7 @@ public class StatusEndpointTests
         Assert.Equal(HttpStatusCode.OK, code);
         Assert.NotEqual("invalid", body.GetProperty("status").GetString());
         var areas = body.GetProperty("checks").EnumerateArray().Select(c => c.GetProperty("area").GetString()).Distinct().ToList();
-        Assert.Equal(["Auth", "Anthropic", "Search", "Queue", "Dlp", "Chat", "Hub", "Conversation", "Web", "Http"], areas);
+        Assert.Equal(["Auth", "Anthropic", "Search", "Kb", "Queue", "Dlp", "Chat", "Hub", "Conversation", "Web", "Http"], areas);
     }
 
     [Theory]

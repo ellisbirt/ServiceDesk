@@ -292,6 +292,8 @@ internal sealed class ProcessorRig : IAsyncDisposable
         services.AddSingleton<IPublicInferenceService>(Inference);
         services.AddSingleton<IIntakeFormGenerator>(new FakeIntakeFormGenerator());
         services.AddSingleton<ILiveSearchService>(new FakeSearch());
+        services.AddSingleton<IKnowledgeBaseSearch>(new FakeKnowledgeBase());
+        services.AddSingleton(Options.Create(new Helpdesk.Infrastructure.Kb.KbOptions()));
         services.AddSingleton<ITicketQueuePublisher>(new RecordingPublisher());
         services.AddSingleton<ISensitiveDataRedactor>(new SensitiveDataRedactor(Options.Create(new DlpOptions())));
         services.AddSingleton<IConversationSigner>(new ConversationSigner(

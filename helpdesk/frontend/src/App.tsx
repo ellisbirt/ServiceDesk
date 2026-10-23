@@ -22,6 +22,7 @@ type ChatItem =
 
 const GENERIC_ERROR = 'Could not reach the helpdesk service. Please try again.';
 const CONNECTION_LOST = 'The connection was interrupted. Please send your message again.';
+const ACCESS_REQUEST_MESSAGE = 'I want to request access for my own work account through the usual approval process.';
 
 function errorText(err: unknown): string {
   return err instanceof ApiError || err instanceof SignInRequiredError ? err.message : GENERIC_ERROR;
@@ -111,9 +112,9 @@ export default function App() {
     // The handlers only touch refs and state setters, so they can be registered once.
   }, []);
 
-  async function send(e?: FormEvent) {
+  async function send(e?: FormEvent, messageOverride?: string) {
     e?.preventDefault();
-    const text = input.trim();
+    const text = (messageOverride ?? input).trim();
     if (!text || pending) return;
 
     // Only messages the server has signed are sent back. A turn that failed has no signature and is left out, so
@@ -225,7 +226,12 @@ export default function App() {
               </div>
             </div>
           ) : item.kind === 'assistant' ? (
-            <ChatMessageResponseBubble key={item.id} response={item.response} />
+            <ChatMessageResponseBubble
+              key={item.id}
+              response={item.response}
+              onStartAccessRequest={() => void send(undefined, ACCESS_REQUEST_MESSAGE)}
+              accessRequestDisabled={pending}
+            />
           ) : item.kind === 'live' ? (
             <LiveReplyBubble
               key={item.id}

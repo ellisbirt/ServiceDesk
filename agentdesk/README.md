@@ -1,6 +1,6 @@
 # AgentDesk: ticket agent console
 
-AgentDesk continues the ticket flow after the intake service in [`../helpdesk`](../helpdesk/README.md). The intake classifies chats and publishes `PRIVATE_CORP` requests to a queue as `ProcessPrivateCorpTicketEvent`. AgentDesk consumes those events and turns them into tickets that service-desk agents work in a web console.
+AgentDesk continues the ticket flow after the intake service in [`../helpdesk`](../helpdesk/README.md). The intake classifies chats and publishes `PRIVATE_CORP` requests—including unresolved general IT issues and requests for human follow-up—to a queue as `ProcessPrivateCorpTicketEvent`. AgentDesk consumes those events and turns them into tickets that service-desk agents work in a web console.
 
 It has the following parts:
 - **Storage.** Tickets, timelines and KB articles live in Cosmos DB. Attachments live in Azure Blob Storage.
@@ -28,7 +28,7 @@ The backend also references the following projects in `../helpdesk/backend/src`:
 - `Helpdesk.Llm`: chat and embedding providers.
 - `Helpdesk.Dlp`: redaction before egress.
 
-**RAG is deliberately not implemented.** Embeddings are stored and the Cosmos container gets a vector index, but nothing queries them yet. AI assist sees only the current ticket and any KB articles the agent explicitly picks.
+**AgentDesk itself does not do RAG.** Embeddings are stored and the Cosmos container gets a vector index, but AgentDesk does not query them. AI assist sees only the current ticket and any KB articles the agent explicitly picks. The intake (`../helpdesk`) is the reader: it searches published, public articles with vector and keyword search (see its "Knowledge-base retrieval"), so keep the embedding model here and in the intake's `embedding` role the same.
 
 ## Run locally (no cloud accounts needed)
 
@@ -78,7 +78,7 @@ $env:Llm__Roles__assist__Provider = "ollama";    $env:Llm__Roles__assist__Model 
 $env:Llm__Roles__embedding__Provider = "ollama"; $env:Llm__Roles__embedding__Model = "nomic-embed-text"
 ```
 
-With the intake running against the same Azurite (`npm run debug` in `../helpdesk/frontend`), a `PRIVATE_CORP` chat message appears in the AgentDesk ticket list within a couple of seconds.
+With the intake running against the same Azurite (`npm run debug` in `../helpdesk/frontend`), a submitted service-desk form for a `PRIVATE_CORP` request appears in the AgentDesk ticket list within a couple of seconds.
 
 ## Configuration (API)
 

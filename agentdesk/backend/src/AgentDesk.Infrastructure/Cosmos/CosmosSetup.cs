@@ -80,6 +80,8 @@ public sealed class CosmosInitializer(CosmosClient client, IOptions<CosmosOption
         await db.CreateContainerIfNotExistsAsync(new ContainerProperties(o.AttachmentsContainer, "/tenantId"), cancellationToken: ct);
 
         var kb = new ContainerProperties(o.KbContainer, "/tenantId");
+        // The emulator rejects an excluded path unless "/*" is also included explicitly.
+        kb.IndexingPolicy.IncludedPaths.Add(new IncludedPath { Path = "/*" });
         kb.IndexingPolicy.ExcludedPaths.Add(new ExcludedPath { Path = "/embedding/*" });
         if (o.EnableVectorPolicy)
         {

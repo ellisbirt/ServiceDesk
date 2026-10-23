@@ -99,7 +99,7 @@ export function IntakeFormCard({
 
       {status.kind === 'sent' && (
         <p role="status" className="mt-3 text-xs text-emerald-400">
-          Sent to the service desk. You'll receive a ticket reference by email.
+          Your request has been sent to the service desk for follow-up.
         </p>
       )}
       {status.kind === 'error' && (

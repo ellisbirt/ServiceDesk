@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Helpdesk.Api.Chat;
 using Helpdesk.Api.Hosting;
 using Helpdesk.Infrastructure.Ai;
+using Helpdesk.Infrastructure.Kb;
 using Helpdesk.Infrastructure.Messaging;
 using Helpdesk.Api.Security;
 using Helpdesk.Infrastructure.Search;
@@ -49,6 +50,7 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
         ValidateAnthropic(dev, Pass, Warn, Fail, Check);
         ValidateLlm(Pass, Fail, Check);
         ValidateSearch(Pass, Warn, Fail, Check);
+        ValidateKb(dev, Pass, Warn, Fail, Check);
         ValidateQueue(dev, Pass, Warn, Fail, Check);
         ValidateDlp(Pass, Fail);
         ValidateChat(Check);
@@ -183,6 +185,47 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
             check(Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var url) && url.Scheme is "http" or "https",
                 area, "BaseUrl", $"{definition.Name} BaseUrl is a valid URL.", $"Search:Providers:{definition.Name}:BaseUrl must be an absolute http(s) URL.");
         }
+    }
+
+    private void ValidateKb(bool dev, Report pass, Report warn, Report fail, Verify check)
+    {
+        const string area = "Kb";
+        var kb = config.GetSection(KbOptions.SectionName).Get<KbOptions>() ?? new();
+        if (string.IsNullOrWhiteSpace(kb.Provider))
+        {
+            pass(area, "Provider", "Knowledge-base retrieval is disabled (Kb:Provider is empty).");
+            return;
+        }
+        if (!string.Equals(kb.Provider, KbProviders.Cosmos, StringComparison.OrdinalIgnoreCase))
+        {
+            fail(area, "Provider", $"Unknown Kb:Provider '{kb.Provider}'. Use '{KbProviders.Cosmos}' or leave it empty to disable.");
+            return;
+        }
+
+        check(!string.IsNullOrWhiteSpace(kb.Cosmos.ConnectionString) || !string.IsNullOrWhiteSpace(kb.Cosmos.Endpoint),
+            area, "Cosmos", "A Cosmos account is configured for the knowledge base.",
+            "Kb:Cosmos:Endpoint (managed identity) or Kb:Cosmos:ConnectionString is required when Kb:Provider is Cosmos.");
+        check(!string.IsNullOrWhiteSpace(kb.Cosmos.Database) && !string.IsNullOrWhiteSpace(kb.Cosmos.Container),
+            area, "Container", $"Reading {kb.Cosmos.Database}/{kb.Cosmos.Container}.",
+            "Kb:Cosmos:Database and Kb:Cosmos:Container must not be empty.");
+        if (kb.Cosmos.AllowInsecureEmulatorCertificate)
+        {
+            check(dev, area, "EmulatorCertificate", "Accepting the Cosmos emulator certificate (development only).",
+                "Kb:Cosmos:AllowInsecureEmulatorCertificate must not be enabled outside Development.");
+        }
+        check(kb.TopResults >= 1 && kb.CandidatePool >= kb.TopResults, area, "Results",
+            "Kb:TopResults and Kb:CandidatePool are valid.", "Kb:TopResults must be at least 1 and no larger than Kb:CandidatePool.");
+        check(kb.RrfK >= 1, area, "RrfK", "Kb:RrfK is at least 1.", "Kb:RrfK must be at least 1.");
+        check(kb.MinSimilarity is >= -1 and <= 1, area, "MinSimilarity",
+            "Kb:MinSimilarity is a valid cosine similarity.", "Kb:MinSimilarity must be between -1 and 1.");
+        check(kb.TimeoutSeconds >= 1, area, "Timeout", "Kb:TimeoutSeconds is at least 1.", "Kb:TimeoutSeconds must be at least 1.");
+
+        var embedding = config[$"{LlmOptions.SectionName}:Roles:{kb.EmbeddingRole}:Provider"];
+        if (string.IsNullOrWhiteSpace(embedding))
+            warn(area, "Embedding",
+                $"Llm:Roles:{kb.EmbeddingRole} is not configured, so only lexical (keyword) search runs. Configure it with the same provider and model AgentDesk embeds articles with to add semantic search.");
+        else
+            pass(area, "Embedding", $"Questions are embedded with the '{LlmProviders.Normalize(embedding)}' provider for semantic search.");
     }
 
     private void ValidateQueue(bool dev, Report pass, Report warn, Report fail, Verify check)

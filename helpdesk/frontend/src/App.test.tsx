@@ -12,7 +12,9 @@ const hub = vi.hoisted(() => {
   const lostHandlers = new Set<() => void>();
   return {
     connect: vi.fn<() => Promise<void>>(),
-    send: vi.fn<(request: { conversationId: string; conversationHistory: unknown[] }) => Promise<ChatAck>>(),
+    send: vi.fn<
+      (request: { messageText: string; conversationId: string; conversationHistory: unknown[] }) => Promise<ChatAck>
+    >(),
     cancel: vi.fn<(conversationId: string) => Promise<boolean>>(),
     onEvent: (handler: (e: unknown) => void) => {
       eventHandlers.add(handler);
@@ -66,6 +68,20 @@ describe('ChatMessageResponseBubble', () => {
     expect(screen.getByText('Sorry, I can’t help with that request.')).toBeInTheDocument();
   });
 
+  it('offers an access request action after a policy refusal', async () => {
+    const onStartAccessRequest = vi.fn();
+    render(
+      <ChatMessageResponseBubble
+        response={{ ...base, actionLane: 'POLICY_VIOLATION', responseText: 'Request access for your own account.' }}
+        onStartAccessRequest={onStartAccessRequest}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start an access request' }));
+
+    expect(onStartAccessRequest).toHaveBeenCalledOnce();
+  });
+
   it('does not render raw HTML from the response', () => {
     render(<ChatMessageResponseBubble response={{ ...base, responseText: '<img src=x onerror=alert(1)>' }} />);
     expect(document.querySelector('img')).toBeNull();
@@ -111,7 +127,7 @@ describe('ChatMessageResponseBubble', () => {
     await userEvent.type(model, ' Example laptop ');
     await userEvent.click(screen.getByRole('button', { name: 'Send to the service desk' }));
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Sent to the service desk');
+    expect(await screen.findByRole('status')).toHaveTextContent('sent to the service desk for follow-up');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toMatch(/\/api\/v1\/chat\/escalate$/);
@@ -197,6 +213,35 @@ describe('App over SignalR', () => {
     await event(request.conversationId, { type: 'completed', response: base });
     expect(screen.getByText('world').tagName).toBe('STRONG');
     expect(screen.queryByText('Assistant is thinking…')).toBeNull();
+  });
+
+  it('starts a same-conversation access request from a policy refusal', async () => {
+    render(<App />);
+    const firstRequest = await sendMessage("Please change Jane's password and send me the new one.");
+    await event(firstRequest.conversationId, {
+      type: 'completed',
+      response: {
+        ...base,
+        actionLane: 'POLICY_VIOLATION',
+        responseText: 'Request access for your own account.',
+        conversationId: firstRequest.conversationId,
+        userSig: 'v1.k1.0.-.user0',
+        assistantSig: 'v1.k1.1.-.assistant0',
+      },
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start an access request' }));
+
+    await waitFor(() => expect(hub.send).toHaveBeenCalledTimes(2));
+    const accessRequest = hub.send.mock.calls[1][0];
+    expect(accessRequest.messageText).toBe(
+      'I want to request access for my own work account through the usual approval process.',
+    );
+    expect(accessRequest.conversationId).toBe(firstRequest.conversationId);
+    expect(accessRequest.conversationHistory).toEqual([
+      { role: 'user', content: "Please change Jane's password and send me the new one.", sig: 'v1.k1.0.-.user0' },
+      { role: 'assistant', content: 'Request access for your own account.', sig: 'v1.k1.1.-.assistant0' },
+    ]);
   });
 
   // What the server returns: a signature for the user's message and one for the reply.

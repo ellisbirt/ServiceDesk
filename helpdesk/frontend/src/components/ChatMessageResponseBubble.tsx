@@ -7,11 +7,15 @@ const LANE_LABELS: Record<ActionLane, string> = {
   POLICY_VIOLATION: 'Policy',
   PUBLIC_TECH: 'General tech',
   PUBLIC_SEARCH: 'Live search',
-  PRIVATE_CORP: 'Escalated',
+  PRIVATE_CORP: 'Service desk',
   NO_MATCH: 'Out of scope',
 };
 
-export const ChatMessageResponseBubble: FC<{ response: HelpdeskApiResponse }> = ({ response }) => {
+export const ChatMessageResponseBubble: FC<{
+  response: HelpdeskApiResponse;
+  onStartAccessRequest?: () => void;
+  accessRequestDisabled?: boolean;
+}> = ({ response, onStartAccessRequest, accessRequestDisabled = false }) => {
   const isViolation = response.actionLane === 'POLICY_VIOLATION';
 
   return (
@@ -28,6 +32,17 @@ export const ChatMessageResponseBubble: FC<{ response: HelpdeskApiResponse }> = 
       <div className="text-sm font-normal leading-relaxed text-zinc-200 prose prose-invert max-w-none">
         <ReactMarkdown>{response.responseText}</ReactMarkdown>
       </div>
+
+      {isViolation && onStartAccessRequest && (
+        <button
+          type="button"
+          onClick={onStartAccessRequest}
+          disabled={accessRequestDisabled}
+          className="mt-3 px-3 py-2 rounded bg-sky-700 hover:bg-sky-600 text-xs text-white font-semibold disabled:opacity-60"
+        >
+          Start an access request
+        </button>
+      )}
 
       {response.intakeForm && response.metadata?.[ESCALATION_TOKEN_METADATA_KEY] && (
         <IntakeFormCard

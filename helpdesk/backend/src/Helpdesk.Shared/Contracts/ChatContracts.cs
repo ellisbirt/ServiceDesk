@@ -7,6 +7,7 @@ public static class ActionLanes
     public const string PolicyViolation = "POLICY_VIOLATION";
     public const string PublicTech = "PUBLIC_TECH";
     public const string PublicSearch = "PUBLIC_SEARCH";
+    /// <summary>Company-specific support, or an in-scope issue the requester wants a service-desk ticket for.</summary>
     public const string PrivateCorp = "PRIVATE_CORP";
     public const string NoMatch = "NO_MATCH";
 

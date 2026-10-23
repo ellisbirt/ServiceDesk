@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Helpdesk.Core.Interfaces;
 using Helpdesk.Infrastructure.Ai;
+using Helpdesk.Shared.Contracts;
 using Microsoft.Extensions.Options;
 
 namespace Helpdesk.Api.Tests;
@@ -68,6 +69,38 @@ public class IntakeFormGeneratorTests
         Assert.Contains("[BEGIN UNTRUSTED client_context ", client.UserContent);
         Assert.Contains("Example/1 <ignore>", client.UserContent);
         Assert.Contains("design a concise follow-up form", client.SystemPrompt);
+        Assert.Contains("SharePoint or other work-system access request", client.SystemPrompt);
+        Assert.Contains("repeat details if the user already provided them", client.SystemPrompt);
+    }
+
+    [Fact]
+    public async Task OfflineGenerator_UsesAccessRequestFieldsForSharePointAccess()
+    {
+        var form = await new OfflineIntakeFormGenerator().GenerateAsync(
+            "I need access to the Finance SharePoint site for the quarterly close.",
+            ActionLanes.PrivateCorp);
+
+        Assert.Equal("Work system access request", form.Title);
+        Assert.Contains(form.Fields, field => field.Id == "target_system");
+        Assert.Contains(form.Fields, field => field.Id == "access_level");
+        Assert.Contains(form.Fields, field => field.Id == "business_reason");
+        Assert.Contains(form.Fields, field => field.Id == "work_account");
+        Assert.Contains(form.Fields, field => field.Id == "approval_status");
+        Assert.Contains(form.Fields, field => field.Id == "access_end_date");
+        Assert.DoesNotContain(form.Fields, field => field.Id == "steps_tried");
+    }
+
+    [Fact]
+    public async Task OfflineGenerator_KeepsGenericFormForNonAccessRequests()
+    {
+        var form = await new OfflineIntakeFormGenerator().GenerateAsync(
+            "My corporate VPN disconnects every few minutes.",
+            ActionLanes.PrivateCorp);
+
+        Assert.Equal("Issue details", form.Title);
+        Assert.Contains(form.Fields, field => field.Id == "issue_details");
+        Assert.Contains(form.Fields, field => field.Id == "steps_tried");
+        Assert.Contains(form.Fields, field => field.Id == "additional_details");
     }
 
     [Fact]

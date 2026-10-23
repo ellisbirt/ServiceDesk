@@ -39,6 +39,13 @@ public static class Telemetry
     public static readonly Counter<long> HistoryMessagesDropped =
         Meter.CreateCounter<long>("helpdesk.history.messages_dropped", description: "History messages dropped because they were unsigned, altered or out of order.");
 
+    /// <summary>Tag: <c>outcome</c> = hit | miss | error | disabled. Tag: <c>mode</c> = hybrid | lexical (no semantic leg ran).</summary>
+    public static readonly Counter<long> KbSearches =
+        Meter.CreateCounter<long>("helpdesk.kb.searches", description: "Knowledge-base retrievals, by outcome.");
+
+    public static readonly Histogram<double> KbSearchDuration =
+        Meter.CreateHistogram<double>("helpdesk.kb.search.duration", unit: "s", description: "Wall time of a knowledge-base retrieval.");
+
     public static readonly Counter<long> PrefilterBlocks =
         Meter.CreateCounter<long>("helpdesk.guardrail.prefilter.blocks", description: "Requests blocked by deterministic guardrail rules.");
 }

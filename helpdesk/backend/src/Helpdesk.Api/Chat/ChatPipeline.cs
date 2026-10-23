@@ -2,7 +2,9 @@ using System.Diagnostics;
 using Helpdesk.Core;
 using Helpdesk.Core.Interfaces;
 using Helpdesk.Infrastructure.Ai;
+using Helpdesk.Infrastructure.Kb;
 using Helpdesk.Shared.Contracts;
+using Microsoft.Extensions.Options;
 
 namespace Helpdesk.Api.Chat;
 
@@ -21,6 +23,8 @@ public sealed class ChatPipeline(
     ISensitiveDataRedactor redactor,
     IConversationSigner signer,
     EscalationTokens escalationTokens,
+    IKnowledgeBaseSearch knowledgeBase,
+    IOptions<KbOptions> kbOptions,
     ILogger<ChatPipeline> logger)
 {
     public async Task<HelpdeskApiResponse> RunAsync(
@@ -66,6 +70,7 @@ public sealed class ChatPipeline(
         Activity.Current?.SetTag("helpdesk.lane", lane);
 
         HelpdeskApiResponse response;
+        IReadOnlyList<KbHit> kbHits = [];
         switch (lane.ToUpperInvariant())
         {
             case ActionLanes.NoMatch:
@@ -79,16 +84,20 @@ public sealed class ChatPipeline(
                 break;
 
             case ActionLanes.PublicTech:
+                kbHits = await RetrieveKnowledgeAsync(request, tenantId, ct);
                 response = Reply(request, ActionLanes.PublicTech,
-                    await inferenceService.ExecutePublicInferenceAsync(request.MessageText, ct, progress, userAgent));
+                    await inferenceService.ExecutePublicInferenceAsync(
+                        request.MessageText, ct, progress, userAgent, request.ConversationHistory, kbHits));
                 break;
 
             case ActionLanes.PublicSearch:
                 // A third party (or the model's own web search) sees this text, so apply the stricter Search policy.
                 var searchText = Sanitize(request.MessageText, EgressDestination.Search, tenantId);
                 var searchMarkdown = await searchService.GetLiveSearchResultsAsync(searchText, ct);
+                // The KB is internal, so it sees the Model-redacted conversation, not the Search-sanitised copy.
+                kbHits = await RetrieveKnowledgeAsync(request, tenantId, ct);
                 response = Reply(request, ActionLanes.PublicSearch,
-                    await inferenceService.ExecuteSearchInferenceAsync(searchText, searchMarkdown, ct, progress, userAgent));
+                    await inferenceService.ExecuteSearchInferenceAsync(searchText, searchMarkdown, ct, progress, userAgent, kbHits));
                 break;
 
             case ActionLanes.PrivateCorp:
@@ -98,9 +107,12 @@ public sealed class ChatPipeline(
                 // Nothing is queued yet: the ticket is raised only once the follow-up form is submitted
                 // (POST /api/v1/chat/escalate), with the request and the answers together.
                 logger.LogInformation("Private infrastructure request awaiting follow-up form for Tenant: {TenantId}", tenantId);
-                response = Reply(request, ActionLanes.PrivateCorp, Prompts.EscalationPending) with
+                // Articles that may already solve it are offered next to the form; submitting the form is still the agreed path.
+                kbHits = await RetrieveKnowledgeAsync(request, tenantId, ct);
+                response = Reply(request, ActionLanes.PrivateCorp, Prompts.EscalationPending + KnowledgeBaseReply.Articles(kbHits)) with
                 {
-                    IntakeForm = await TryGenerateFormAsync(request.MessageText, lane, tenantId, ct, userAgent)
+                    IntakeForm = await TryGenerateFormAsync(
+                        FormContext(request), lane, tenantId, ct, userAgent)
                         ?? FallbackForm,
                     Metadata = new()
                     {
@@ -114,7 +126,25 @@ public sealed class ChatPipeline(
                 throw new UnsupportedLaneException(lane);
         }
 
+        if (kbHits.Count > 0) response.Metadata[KnowledgeBaseMetadataKey] = string.Join(",", kbHits.Select(h => h.Number));
         return response;
+    }
+
+    /// <summary>Response metadata key listing the numbers of the KB articles the reply was given, comma separated.</summary>
+    public const string KnowledgeBaseMetadataKey = "kbArticles";
+
+    /// <summary>
+    /// Finds KB articles for the request. The earlier user messages are part of the query so a short follow-up such as
+    /// "it's still not working" keeps its subject. Never fails the reply: <see cref="IKnowledgeBaseSearch"/> returns
+    /// nothing when the KB is unavailable.
+    /// </summary>
+    private Task<IReadOnlyList<KbHit>> RetrieveKnowledgeAsync(ChatMessageRequest request, string tenantId, CancellationToken ct)
+    {
+        var earlier = request.ConversationHistory
+            .Where(m => m.Role == "user")
+            .TakeLast(Math.Max(0, kbOptions.Value.HistoryMessages))
+            .Select(m => m.Content);
+        return knowledgeBase.SearchAsync(tenantId, string.Join("\n", earlier.Append(request.MessageText)), ct);
     }
 
     /// <summary>Response metadata key holding the pending escalation's token, which the form submission must return.</summary>
@@ -129,9 +159,9 @@ public sealed class ChatPipeline(
         [
             new IntakeFormField
             {
-                Id = "additional_details",
-                Label = "Additional details",
-                Description = "Anything else the team should know: affected systems, when it started, and how urgent it is.",
+                Id = "issue_details",
+                Label = "What is the issue?",
+                Description = "Describe what happened, when it started, who or what is affected, and any steps already tried.",
                 InputType = "textarea"
             }
         ]
@@ -150,6 +180,15 @@ public sealed class ChatPipeline(
             logger.LogWarning(ex, "Follow-up form could not be generated for an escalated request for Tenant: {TenantId}", tenantId);
             return null;
         }
+    }
+
+    private static string FormContext(ChatMessageRequest request)
+    {
+        if (request.ConversationHistory.Count == 0) return request.MessageText;
+
+        var context = string.Join("\n", request.ConversationHistory.TakeLast(6)
+            .Select(message => $"{message.Role}: {message.Content}"));
+        return $"{context}\nuser: {request.MessageText}";
     }
 
     private ChatMessageRequest Redact(ChatMessageRequest request, string tenantId)

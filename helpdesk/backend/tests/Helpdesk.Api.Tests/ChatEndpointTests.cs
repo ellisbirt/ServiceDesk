@@ -54,20 +54,27 @@ public sealed class FakeInference : IPublicInferenceService
     /// <summary>Every question the model was asked, in order, so a test can see what did and did not run.</summary>
     public System.Collections.Concurrent.ConcurrentQueue<string> Inputs { get; } = new();
     public string? LastUserAgent { get; private set; }
+    public IReadOnlyList<ChatHistoryMessage>? LastHistory { get; private set; }
+    /// <summary>The KB articles passed with the most recent question (public or search), or null if none.</summary>
+    public IReadOnlyList<KbHit>? LastKnowledgeBase { get; private set; }
 
     public async Task<string> ExecutePublicInferenceAsync(string userInput, CancellationToken ct = default,
-        IChatProgress? progress = null, string? userAgent = null)
+        IChatProgress? progress = null, string? userAgent = null,
+        IReadOnlyList<ChatHistoryMessage>? conversationHistory = null, IReadOnlyList<KbHit>? knowledgeBase = null)
     {
         Inputs.Enqueue(userInput);
         LastUserAgent = userAgent;
+        LastHistory = conversationHistory;
+        LastKnowledgeBase = knowledgeBase;
         if (OnReply is not null) await OnReply(progress, ct);
         return "tech answer";
     }
 
     public Task<string> ExecuteSearchInferenceAsync(string userInput, string ctx, CancellationToken ct = default,
-        IChatProgress? progress = null, string? userAgent = null)
+        IChatProgress? progress = null, string? userAgent = null, IReadOnlyList<KbHit>? knowledgeBase = null)
     {
         LastUserAgent = userAgent;
+        LastKnowledgeBase = knowledgeBase;
         return Task.FromResult($"search answer: {ctx}");
     }
 }
@@ -155,6 +162,7 @@ public sealed class ApiFactory(
     public FakeRouter Router { get; } = new();
     public FakeInference Inference { get; } = new();
     public FakeSearch Search { get; } = new();
+    public FakeKnowledgeBase KnowledgeBase { get; } = new();
     public FakeIntakeFormGenerator FormGenerator { get; } = new();
     public CapturingSink Logs { get; } = new();
 
@@ -217,6 +225,8 @@ public sealed class ApiFactory(
             s.AddSingleton<IPublicInferenceService>(Inference);
             s.RemoveAll<ILiveSearchService>();
             s.AddSingleton<ILiveSearchService>(Search);
+            s.RemoveAll<IKnowledgeBaseSearch>();
+            s.AddSingleton<IKnowledgeBaseSearch>(KnowledgeBase);
             s.RemoveAll<IIntakeFormGenerator>();
             s.AddSingleton<IIntakeFormGenerator>(FormGenerator);
         });
@@ -376,6 +386,78 @@ public class ChatEndpointTests
         Assert.Equal("search answer: results", search!.ResponseText);
         Assert.Null(search.IntakeForm);
         Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task PublicTech_PassesVerifiedHistorySoItCanCloseTheIssueOrOfferFollowUp()
+    {
+        using var f = new ApiFactory();
+        var conversationId = Guid.NewGuid();
+        var history = f.SignedHistory("tenant-a", "user-1", conversationId,
+            ("user", "My laptop audio stopped working."),
+            ("assistant", "Check whether the audio output is muted. Did that fix it?"));
+        f.Router.Handler = _ => (ActionLanes.PublicTech, "");
+        using var request = Post("It works now, thanks.", conversationId);
+        request.Content = JsonContent.Create(new
+        {
+            messageText = "It works now, thanks.",
+            conversationId,
+            conversationHistory = history
+        });
+
+        var response = await f.CreateClient().SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(history, f.Inference.LastHistory);
+        Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task UnresolvedPublicTechFollowUp_ContinuesTroubleshootingWithoutOpeningTicket()
+    {
+        using var f = new ApiFactory();
+        var client = f.CreateClient();
+        var conversationId = Guid.NewGuid();
+        var initialIssue = "My work laptop Wi-Fi won't connect.";
+        var initialReply = await Reply(client, initialIssue, conversationId);
+        f.Router.Handler = _ => (ActionLanes.PublicTech, "");
+
+        using var followUp = new HttpRequestMessage(HttpMethod.Post, "/api/v1/chat/message")
+        {
+            Content = JsonContent.Create(new
+            {
+                messageText = "It still won't connect.",
+                conversationId,
+                conversationHistory = new[]
+                {
+                    new ChatHistoryMessage
+                    {
+                        Role = "user",
+                        Content = initialIssue,
+                        Signature = initialReply.UserSignature
+                    },
+                    new ChatHistoryMessage
+                    {
+                        Role = "assistant",
+                        Content = initialReply.ResponseText,
+                        Signature = initialReply.AssistantSignature
+                    }
+                }
+            })
+        };
+        followUp.Headers.Add("X-Dev-Tenant", "tenant-a");
+        followUp.Headers.Add("X-Dev-User", "user-1");
+
+        var replyResponse = await client.SendAsync(followUp);
+
+        Assert.Equal(HttpStatusCode.OK, replyResponse.StatusCode);
+        var technicalReply = (await replyResponse.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
+        Assert.Equal(ActionLanes.PublicTech, technicalReply.ActionLane);
+        Assert.Null(technicalReply.IntakeForm);
+        Assert.Empty(f.Publisher.Sent);
+        Assert.Equal(2, f.Inference.LastHistory!.Count);
+        Assert.Contains(initialIssue, f.Inference.LastHistory[0].Content);
+        Assert.Contains("It still won't connect.", f.Inference.Inputs.Last());
     }
 
     [Fact]

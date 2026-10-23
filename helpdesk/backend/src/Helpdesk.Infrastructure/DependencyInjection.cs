@@ -3,6 +3,7 @@ using Azure.Messaging.ServiceBus;
 using Azure.Storage.Queues;
 using Helpdesk.Core.Interfaces;
 using Helpdesk.Infrastructure.Ai;
+using Helpdesk.Infrastructure.Kb;
 using Helpdesk.Infrastructure.Messaging;
 using Helpdesk.Infrastructure.Search;
 using Helpdesk.Infrastructure.Security;
@@ -75,6 +76,7 @@ public static class DependencyInjection
         }
 
         services.AddLiveSearch(config);
+        services.AddKnowledgeBase(config);
 
         switch (queueProvider)
         {

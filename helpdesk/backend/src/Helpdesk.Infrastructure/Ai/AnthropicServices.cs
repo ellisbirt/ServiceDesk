@@ -28,6 +28,12 @@ internal static class PromptInput
             .ToArray());
         return $"{content}\n\n{Wrap("client_context", $"User-Agent: {safeUserAgent}")}";
     }
+
+    /// <summary>Each retrieved article is wrapped separately: its content was written by people and is data, not instructions.</summary>
+    public static string KnowledgeBase(IReadOnlyList<KbHit>? hits) =>
+        hits is not { Count: > 0 }
+            ? ""
+            : string.Join("\n", hits.Select(h => Wrap("kb_article", $"{h.Number}: {h.Title}\n{h.Excerpt}"))) + "\n\n";
 }
 
 public sealed class AnthropicGuardrailRouterService(
@@ -160,14 +166,17 @@ public sealed class AnthropicPublicInferenceService(
 
     public Task<string> ExecutePublicInferenceAsync(
         string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null,
-        string? userAgent = null) =>
-        ReplyAsync(Prompts.PublicTech,
-            PromptInput.WithUserAgent(PromptInput.Wrap("user_query", userInput), userAgent),
+        string? userAgent = null, IReadOnlyList<ChatHistoryMessage>? conversationHistory = null,
+        IReadOnlyList<KbHit>? knowledgeBase = null) =>
+        ReplyAsync(Prompts.WithKnowledgeBase(Prompts.PublicTech, knowledgeBase),
+            PromptInput.WithUserAgent(
+                $"{PromptInput.KnowledgeBase(knowledgeBase)}{(conversationHistory is { Count: > 0 } ? PromptInput.Wrap("conversation_history", JsonSerializer.Serialize(conversationHistory)) + "\n\n" : "")}{PromptInput.Wrap("user_query", userInput)}",
+                userAgent),
             tools: null, progress, cancellationToken);
 
     public Task<string> ExecuteSearchInferenceAsync(
         string userInput, string searchContextMarkdown, CancellationToken cancellationToken = default,
-        IChatProgress? progress = null, string? userAgent = null)
+        IChatProgress? progress = null, string? userAgent = null, IReadOnlyList<KbHit>? knowledgeBase = null)
     {
         if (_nativeSearch)
         {
@@ -178,15 +187,15 @@ public sealed class AnthropicPublicInferenceService(
                 ["name"] = "web_search",
                 ["max_uses"] = _options.WebSearchMaxUses
             });
-            return ReplyAsync(Prompts.PublicSearchNative,
-                PromptInput.WithUserAgent(PromptInput.Wrap("user_query", userInput), userAgent),
+            return ReplyAsync(Prompts.WithKnowledgeBase(Prompts.PublicSearchNative, knowledgeBase),
+                PromptInput.WithUserAgent($"{PromptInput.KnowledgeBase(knowledgeBase)}{PromptInput.Wrap("user_query", userInput)}", userAgent),
                 tools, progress, cancellationToken);
         }
 
         return ReplyAsync(
-            Prompts.PublicSearch,
+            Prompts.WithKnowledgeBase(Prompts.PublicSearch, knowledgeBase),
             PromptInput.WithUserAgent(
-                $"{PromptInput.Wrap("search_results", searchContextMarkdown)}\n\n{PromptInput.Wrap("user_query", userInput)}",
+                $"{PromptInput.KnowledgeBase(knowledgeBase)}{PromptInput.Wrap("search_results", searchContextMarkdown)}\n\n{PromptInput.Wrap("user_query", userInput)}",
                 userAgent),
             tools: null, progress, cancellationToken);
     }

@@ -49,6 +49,11 @@ Set secrets with `dotnet user-secrets` or environment variables (`Anthropic__Api
 | `Search:Provider` | Web search backend for the `PUBLIC_SEARCH` lane. One of `Tavily` (default), `Brave`, `Serper`, `Google`, `SearXNG`, or `Claude` (see "Web search providers"). |
 | `Search:Providers:<Name>:ApiKey` | Credentials for the chosen provider. `Search:ApiKey` is a shorthand for the active provider. `Google` also needs `SearchEngineId`; `SearXNG` needs `BaseUrl` instead of a key. If the chosen provider has no credentials, a stub is used and search answers say no results are available. |
 | `Search:TopResults` | Results passed to the model (default 3). |
+| `Kb:Provider` | Knowledge-base retrieval over AgentDesk's KB. Empty (default) disables it; `Cosmos` reads AgentDesk's `kb` container (see "Knowledge-base retrieval"). |
+| `Kb:Cosmos:Endpoint` or `Kb:Cosmos:ConnectionString`, `Kb:Cosmos:Database`, `Kb:Cosmos:Container` | The AgentDesk Cosmos account (defaults `agentdesk` / `kb`). Use managed identity with a read-only role in Azure. `Kb:Cosmos:AllowInsecureEmulatorCertificate` is for the emulator only. |
+| `Kb:EmbeddingRole` | The `Llm:Roles` entry that embeds the question (default `embedding`). It must use the same provider and model AgentDesk embeds articles with. Without it only lexical search runs. |
+| `Kb:TopResults`, `Kb:CandidatePool`, `Kb:RrfK`, `Kb:MinSimilarity` | Articles given to the model (default 3), candidates taken from each search before fusion (20), the rank-fusion constant (60) and the cosine similarity a semantic match must reach (0.35; tune per embedding model). |
+| `Kb:TimeoutSeconds`, `Kb:CorpusCacheSeconds`, `Kb:MaxArticles`, `Kb:HistoryMessages` | Retrieval deadline (5 s), how long a tenant's articles stay cached for the lexical index (60 s), the per-tenant article cap (2000) and how many earlier user messages join the query (2). |
 | `Queue:Provider` | `StorageQueue` or `ServiceBus`. Defaults to `StorageQueue` in Development; required elsewhere. |
 | `StorageQueue:ConnectionString` or `StorageQueue:QueueServiceUri` (managed identity), `StorageQueue:QueueName` | Storage queue settings (`PRIVATE_CORP`). |
 | `ServiceBus:ConnectionString` or `ServiceBus:FullyQualifiedNamespace` (managed identity), `ServiceBus:QueueName` | Service Bus settings, used when `Queue:Provider` is `ServiceBus`. |
@@ -72,6 +77,66 @@ Set secrets with `dotnet user-secrets` or environment variables (`Anthropic__Api
 | `Http:MaxRequestBodyBytes` | Largest request body on `/api` paths (default 131072, i.e. 128 KB, up to 4 MB). Larger requests get 413 `request_too_large`. Must cover a full-length conversation; the startup check enforces the minimum. |
 | `Http:Csp:AuthorityOrigins`, `Http:Csp:Policy` | Content-Security-Policy for the hosted SPA. Authority origins default to the origin of `Auth:Authority`; `Policy` replaces the generated policy. `AllowedHosts: *` is reported as a warning by `/status`. |
 | `Chat:KeepAliveSeconds`, `Chat:ClientTimeoutSeconds` | SignalR transport ping (default 15) and client timeout (default 60). Keep the timeout at least twice the ping. The UI client uses a 60 s server timeout to match. |
+
+## Knowledge-base retrieval
+
+### Turn it on
+
+Retrieval is off until `Kb:Provider` is set (the settings are in the Configuration table).
+
+1. **Point it at AgentDesk's Cosmos account.** Set `Kb:Provider=Cosmos` and either `Kb:Cosmos:Endpoint` (managed identity with a read-only data role) or `Kb:Cosmos:ConnectionString`. `Kb:Cosmos:Database` and `Kb:Cosmos:Container` default to `agentdesk` and `kb`, which are AgentDesk's defaults.
+2. **Configure the embedding role.** Set `Llm:Roles:embedding` to the same provider, model and `Dimensions` as AgentDesk's `embedding` role. Vectors from another model are never compared, so a mismatch silently gives lexical results only. If the role is missing, `/status` shows a `Kb` warning and only lexical search runs.
+3. **Check `/status`.** The `Kb` area should pass.
+4. **Make sure the articles qualify.** Only `published` articles with `public` visibility are searched, and semantic search also needs the article's embedding to be `ready`.
+
+Production example:
+
+```json
+"Kb": { "Provider": "Cosmos", "Cosmos": { "Endpoint": "https://<account>.documents.azure.com:443/" } },
+"Llm": { "Roles": {
+  "embedding": { "Provider": "azure_openai", "Endpoint": "https://<resource>.openai.azure.com/", "Model": "<text-embedding-3-small-deployment>", "Dimensions": 1536 }
+} }
+```
+
+#### Locally
+
+`appsettings.Development.json` already enables it against the Cosmos emulator on `https://localhost:8081`, using the emulator's published well-known key (not a secret) and AgentDesk's default offline embedding role (`offline-embedding`, 1536 dimensions). `Kb:MinSimilarity` is lowered to 0.1 because the offline embedding is a hashed bag of words, so its similarities are small.
+
+To see articles in the intake chat:
+
+```powershell
+# terminal 1 - AgentDesk on the same emulator (see ..\agentdesk\README.md "Using real local services")
+$env:Storage__Provider = "Cosmos"
+$env:Cosmos__ConnectionString = "<emulator connection string>"
+$env:Cosmos__AllowInsecureEmulatorCertificate = "true"
+cd ..\agentdesk\backend\src\AgentDesk.Api; dotnet run --launch-profile http
+
+# terminal 2 - the intake
+cd backend\src\Helpdesk.Api; dotnet run --launch-profile http
+```
+
+Create a KB article in the AgentDesk UI (http://localhost:5174), and publish it with `public` visibility. Wait for its embedding to become ready (up to a minute: the sweep retries pending embeddings). Then ask the intake chat about it. The reply lists the article under `PRIVATE_CORP`, or is grounded in it for `PUBLIC_TECH`. The dev auth tenant must match the tenant the article was created under: both services default to the dev tenant, or set `X-Dev-Tenant` to the same value.
+
+Without the emulator running, or with `Kb:Provider` cleared, retrieval just returns nothing and the intake works as before. To switch it off locally, set `Kb__Provider=` (empty) in the environment.
+
+### How it works
+
+When `Kb:Provider` is set, the answering lanes are grounded in the tenant's own knowledge base (the articles AgentDesk agents write), using retrieval-augmented generation (RAG). It runs after classification, so nothing is retrieved for a `POLICY_VIOLATION` or `NO_MATCH` message.
+
+- **`PUBLIC_TECH` and `PUBLIC_SEARCH`:** the top articles are passed to the model next to the question, each wrapped as untrusted data. The prompt tells the model to use an article only when it clearly applies, to prefer it to general advice and to cite it by number. The `PUBLIC_SEARCH` lane keeps its web results and adds the articles.
+- **`PRIVATE_CORP`:** no model is involved. The reply lists the matching articles above the follow-up form, so the requester can self-serve first. The ticket is still raised only when the form is submitted.
+- The numbers of the articles used come back in `metadata.kbArticles`.
+
+How a question is searched:
+
+1. **Query.** The redacted message plus the user's last two earlier messages (`Kb:HistoryMessages`), so "it's still not working" keeps its subject.
+2. **Semantic search.** The query is embedded (DLP `Embedding` destination) and compared with the stored article vectors using Cosmos `VectorDistance`. This finds the right article when the wording differs. Only vectors made by the same provider and model are compared, and only articles that are `published` and `public` are searched. Each query reads a single tenant partition.
+3. **Lexical search.** BM25 over the tenant's published articles, held in memory for `Kb:CorpusCacheSeconds`. Title, tags and summary count more than the body. It finds exact identifiers (error codes, product names, KB numbers) that embeddings blur, and an article must contain at least two of the query's terms unless it matches an identifier. It also runs when no embedding model is configured.
+4. **Fusion.** The two rankings are merged with reciprocal rank fusion (`1 / (k + rank)` per list, summed), so cosine and BM25 scores never need to be normalised against each other, and an article both searches rank well beats one that only one search likes.
+
+Retrieval is best effort. A failure or a timeout (`Kb:TimeoutSeconds`) returns no articles and the answer goes ahead without them. If the vector query fails (for example the account lacks vector search), the semantic leg is skipped for a minute and lexical results are still used. Telemetry: `helpdesk.kb.searches` (tags `outcome`, `mode`) and `helpdesk.kb.search.duration`.
+
+Helpdesk reads AgentDesk's Cosmos schema directly (`CosmosKbSource`), so a change to AgentDesk's `KbArticle` fields, its status and visibility values or the `/embedding` path needs a matching change there. Only the `Cosmos` provider exists; to read the KB some other way, implement `IKbSource`.
 
 ## Web search providers
 
@@ -109,11 +174,11 @@ cd frontend; npm run test:e2e   # Playwright + axe against a mocked API (first t
 
 A model call can be slow, and when Anthropic answers HTTP 429 the `Retry-After` wait can exceed any sensible HTTP request timeout. So the UI does not wait on a request: it connects to the hub at `/hubs/chat`, and replies arrive as events.
 
-After the response is prepared, the model generates a small form from the redacted request and classification, but only on the `PRIVATE_CORP` lane. The form fields vary by scenario (for example, a battery-drain report asks for device and battery details, not access approvals). In offline Development mode, or when form generation fails, the app uses a generic form.
+After the response is prepared, the model generates a small form from the redacted request, recent conversation and classification on the `PRIVATE_CORP` lane. This lane includes company-system requests and general IT issues the user explicitly asks to send to the service desk. `PUBLIC_TECH` replies use recent conversation context and make a best effort to resolve issues with relevant, safe troubleshooting. If a step fails, the assistant continues with a different useful check or focused question; it does not escalate merely because the issue remains unresolved. It offers the service-desk form when no further useful step is allowed by safety, security or capability constraints, or when the user explicitly requests a hand-off. Confirmed fixes receive a clear confirmation without a ticket. The form fields vary by scenario (for example, a battery-drain report asks about device and battery details, not access approvals). In offline Development mode, or when form generation fails, the app uses a generic issue-details form.
 
-**Escalation waits for the form.** A `PRIVATE_CORP` reply queues nothing. It returns the form and, in `metadata.escalationToken`, an HMAC-signed pending escalation. The token carries the Queue-redacted request and is bound to the tenant, user and conversation. It is valid for 24 hours. When the user submits the form, the UI posts `{conversationId, escalationToken, formTitle, answers:[{label, value}]}` to `POST /api/v1/chat/escalate`. The API verifies the token, redacts the answers with the Queue policy, and publishes one `ProcessPrivateCorpTicketEvent`. Its `sanitizedPayload` is the original request followed by the form answers, and its `details` holds the same answers in structured form.
+**Ticket creation waits for form submission.** A `PRIVATE_CORP` reply queues nothing. It returns the form and, in `metadata.escalationToken`, an HMAC-signed pending escalation. The token carries the Queue-redacted request and is bound to the tenant, user and conversation. It is valid for 24 hours. When the user submits the form, the UI posts `{conversationId, escalationToken, formTitle, answers:[{label, value}]}` to `POST /api/v1/chat/escalate`. The API verifies the token, redacts the answers with the Queue policy, and publishes one `ProcessPrivateCorpTicketEvent`. Its `sanitizedPayload` is the original request followed by the form answers, and its `details` holds the same answers in structured form.
 
-The endpoint returns `202 {ticketEventId, status: "queued"}`. A bad, expired or foreign token returns `400` on `escalationToken`, and a queue failure returns `503`. Submitting the same token again republishes the same event id, which the consumer deduplicates. A user who never submits the form creates no ticket.
+The endpoint returns `202 {ticketEventId, status: "queued"}`; the UI confirms that the request was sent to the service desk for follow-up. A bad, expired or foreign token returns `400` on `escalationToken`, and a queue failure returns `503`. Submitting the same token again republishes the same event id, which the consumer deduplicates. A user who never submits the form creates no ticket.
 
 The HTTP `User-Agent` is also passed to the classifier, response model and form generator as a bounded `<client_context>` block. It is client-supplied, treated as untrusted metadata rather than instructions or proof of identity, and may be used only where relevant to client-specific troubleshooting.
 
@@ -146,7 +211,7 @@ Limits to know about (see also "Known gaps" item 3): jobs are queued in memory, 
 
 ## Design notes
 
-- **Everyday IT support.** `PUBLIC_TECH` includes hardware/battery/power, performance, screen/audio/peripherals, Wi-Fi/internet, applications, email/collaboration, own-device login errors, approved self-service account recovery, and basic phishing/security guidance, alongside coding and configuration. Symptom-only reports are valid requests: missing diagnostic details should lead to follow-up questions, not rejection. Company-specific infrastructure, permissions, corporate identity administration, and provisioning remain `PRIVATE_CORP`; current external outages/releases remain `PUBLIC_SEARCH`. Requests for another person's credentials or security bypasses remain `POLICY_VIOLATION`. The Development keyword router recognizes common terms but is not a substitute for model classification.
+- **Everyday IT support.** `PUBLIC_TECH` includes hardware/battery/power, performance, screen/audio/peripherals, Wi-Fi/internet, applications, email/collaboration, own-device login errors, approved self-service account recovery, and basic phishing/security guidance, alongside coding and configuration. Symptom-only reports are valid requests: missing diagnostic details should lead to follow-up questions, not rejection. Replies use signed conversation history to continue troubleshooting after a failed check, confirm user-reported fixes, and route explicit ticket requests or issues with no safe, permitted next step to the service-desk form (`PRIVATE_CORP`). Company-specific infrastructure, permissions, corporate identity administration, and provisioning also remain `PRIVATE_CORP`; current external outages/releases remain `PUBLIC_SEARCH`. Requests for another person's credentials or security bypasses remain `POLICY_VIOLATION`. The Development keyword router recognizes common terms but is not a substitute for model classification.
 - **Fail closed.** The message is classified before anything else happens. Out-of-scope messages or requests with no identifiable IT task in their conversation context receive a polite `NO_MATCH` decline without inference or queueing. If classification fails (upstream error, malformed JSON, unknown lane) the API returns 503 and nothing is queued. The queue publisher is only called by `POST /api/v1/chat/escalate`, after a `PRIVATE_CORP` reply's form has been submitted.
 - **HTTP exceptions.** Unhandled exceptions are mapped to RFC 9457 Problem Details with stable status codes, error codes and correlation IDs. Stack traces are included in the `detail` field only in the `Development` and `LocalDevelopment` environments.
 - **Swappable queue.** The endpoint depends on `ITicketQueuePublisher`; `ServiceBusTicketPublisher` and `StorageQueueTicketPublisher` implement it and `Queue:Provider` picks one. Storage queues have no partition key or message properties, so the tenant is only in the JSON body (`tenantId`), and the message is plain JSON, not base64. Consumers must match.
@@ -191,6 +256,6 @@ These were found in an enterprise/SaaS review and are deliberately not fixed yet
 - Spec section 3 says ".NET 9" while the header says .NET 10; this uses .NET 10.
 - "Claude 3.5 Sonnet" is retired; the configurable default is `claude-sonnet-5-5`. Native Anthropic search uses `web_search_20260318`.
 - The specified endpoint is a plain request/response POST, which is kept as a synchronous fallback. The UI uses the SignalR hub (see "Asynchronous chat").
-- The downstream queue consumer is [AgentDesk](../agentdesk/README.md). It reads `ProcessPrivateCorpTicketEvent` from the same Storage queue or Service Bus queue and creates tickets in Cosmos DB. Cosmos DB RAG and PIM integration are outside this component. The PIM access-request card currently only confirms locally on submit; it is not wired to Entra PIM.
+- The downstream queue consumer is [AgentDesk](../agentdesk/README.md). It reads `ProcessPrivateCorpTicketEvent` from the same Storage queue or Service Bus queue and creates tickets in Cosmos DB. The intake can ground answers in AgentDesk's knowledge base (see "Knowledge-base retrieval"). PIM integration is outside this component. The PIM access-request card currently only confirms locally on submit; it is not wired to Entra PIM.
 - The spec's EF Core tenant-filter rule has nothing to apply to here, as this component has no database entities.
 - Service Bus `PartitionKey` (Service Bus provider only) only works on partitioning-enabled queues and cannot differ from a `SessionId` if sessions are enabled.
