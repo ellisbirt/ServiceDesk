@@ -60,6 +60,14 @@ export function TicketDetailPage() {
           <h2 className="sr-only">Description</h2>
           <MarkdownView>{t.description}</MarkdownView>
         </div>
+        {t.conversationSummary && (
+          <section className="border-t border-slate-200 pt-2" aria-labelledby="conversation-summary-heading">
+            <h2 id="conversation-summary-heading" className="text-sm font-semibold text-slate-900">
+              Conversation so far
+            </h2>
+            <p className="mt-1 whitespace-pre-line text-sm text-slate-700">{t.conversationSummary}</p>
+          </section>
+        )}
       </header>
 
       {published.length > 0 && (

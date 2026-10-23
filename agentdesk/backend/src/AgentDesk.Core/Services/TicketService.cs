@@ -30,7 +30,8 @@ public sealed record IntakeTicket(
     string? Severity,
     string? Category,
     string? ConversationId,
-    string? CorrelationId);
+    string? CorrelationId,
+    string? ConversationSummary = null);
 
 public sealed class TicketService(
     ITicketRepository repository,
@@ -127,6 +128,9 @@ public sealed class TicketService(
             Source = new TicketSource(intake.EventId, intake.ConversationId, intake.CorrelationId)
         };
         var ticket = await NewTicketAsync(system, ticketId, command, ct);
+        ticket.ConversationSummary = string.IsNullOrWhiteSpace(intake.ConversationSummary)
+            ? null
+            : Truncate(intake.ConversationSummary.Trim(), MaxDescription);
         try
         {
             return (await PersistNewAsync(system, ticket, ct), true);

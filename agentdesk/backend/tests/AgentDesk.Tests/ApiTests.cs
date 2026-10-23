@@ -219,6 +219,35 @@ public class ApiTests(AgentDeskFactory factory) : IClassFixture<AgentDeskFactory
     }
 
     [Fact]
+    public async Task Intake_KeepsSummaryAndConversationInSeparateFields_AndLegacyEventsStillImport()
+    {
+        using var scope = factory.Services.CreateScope();
+        var processor = scope.ServiceProvider.GetRequiredService<IntakeEventProcessor>();
+        var repository = scope.ServiceProvider.GetRequiredService<ITicketRepository>();
+        var withBoth = new ProcessPrivateCorpTicketEvent
+        {
+            TenantId = "default",
+            UserId = "user-7",
+            ConversationId = Guid.NewGuid(),
+            CorrelationId = "corr-2",
+            SanitizedPayload = "Summary:\nNeeds read access.\n\nConversation so far:\n- Asked for access.",
+            Summary = "Needs read access to the Finance site.",
+            ConversationSummary = "- Asked for Bob's password; told to request access instead.\n- Reachable on a@example.com."
+        };
+        var legacy = withBoth with { EventId = Guid.NewGuid(), Summary = null, ConversationSummary = null, SanitizedPayload = "Old style payload." };
+
+        Assert.Equal(IntakeOutcome.Created, await processor.ProcessAsync(JsonSerializer.Serialize(withBoth), default));
+        Assert.Equal(IntakeOutcome.Created, await processor.ProcessAsync(JsonSerializer.Serialize(legacy), default));
+
+        var ticket = await repository.GetAsync("default", AgentDesk.Core.Services.TicketService.DeterministicId("default", withBoth.EventId.ToString("D")));
+        Assert.Equal("Needs read access to the Finance site.", ticket!.Description);
+        Assert.Equal(withBoth.ConversationSummary, ticket.ConversationSummary);
+        var old = await repository.GetAsync("default", AgentDesk.Core.Services.TicketService.DeterministicId("default", legacy.EventId.ToString("D")));
+        Assert.Equal("Old style payload.", old!.Description);
+        Assert.Null(old.ConversationSummary);
+    }
+
+    [Fact]
     public async Task Embedding_SkipsUnchangedContentAndRefreshesOnEdit()
     {
         using var scope = factory.Services.CreateScope();

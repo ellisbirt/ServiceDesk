@@ -1,6 +1,6 @@
 # AgentDesk: ticket agent console
 
-AgentDesk continues the ticket flow after the intake service in [`../helpdesk`](../helpdesk/README.md). The intake classifies chats and publishes `PRIVATE_CORP` requests—including unresolved general IT issues and requests for human follow-up—to a queue as `ProcessPrivateCorpTicketEvent`. AgentDesk consumes those events and turns them into tickets that service-desk agents work in a web console.
+AgentDesk continues the ticket flow after the intake service in [`../helpdesk`](../helpdesk/README.md). The intake classifies chats and publishes `PRIVATE_CORP` requests—including unresolved general IT issues and requests for human follow-up—to a queue as `ProcessPrivateCorpTicketEvent`. AgentDesk consumes those events and turns them into tickets that service-desk agents work in a web console. The ticket description is the event's `summary` (what the requester needs), and the event's `conversationSummary` (what was asked, tried and said in the chat) is stored separately as the ticket's `conversationSummary` and shown as its own "Conversation so far" section. Events from before those fields existed fall back to `sanitizedPayload` as the description.
 
 It has the following parts:
 - **Storage.** Tickets, timelines and KB articles live in Cosmos DB. Attachments live in Azure Blob Storage.
@@ -78,7 +78,7 @@ $env:Llm__Roles__assist__Provider = "ollama";    $env:Llm__Roles__assist__Model 
 $env:Llm__Roles__embedding__Provider = "ollama"; $env:Llm__Roles__embedding__Model = "nomic-embed-text"
 ```
 
-With the intake running against the same Azurite (`npm run debug` in `../helpdesk/frontend`), a submitted service-desk form for a `PRIVATE_CORP` request appears in the AgentDesk ticket list within a couple of seconds.
+With the intake running against the same Azurite (`npm run debug` in `../helpdesk/frontend`), a `PRIVATE_CORP` request that the assistant raised as a ticket appears in the AgentDesk ticket list within a couple of seconds.
 
 ## Configuration (API)
 

@@ -77,6 +77,28 @@ describe('shell', () => {
 });
 
 describe('ticket detail', () => {
+  it('shows the conversation summary as its own section, apart from the description', async () => {
+    mockApi({
+      ...ticketRoutes,
+      'GET /tickets/t-1': () => ticket({ conversationSummary: '- Asked for access.\n- Reachable on a@example.com.' }),
+    });
+    renderAt('/tickets/t-1');
+
+    const heading = await screen.findByRole('heading', { level: 2, name: 'Conversation so far' });
+    const section = heading.closest('section')!;
+    expect(section).toHaveTextContent('Asked for access.');
+    expect(section).toHaveTextContent('Reachable on a@example.com.');
+    expect(section).not.toHaveTextContent('VPN disconnects every 5 minutes');
+  });
+
+  it('omits the conversation section when the ticket has none', async () => {
+    mockApi(ticketRoutes);
+    renderAt('/tickets/t-1');
+
+    await screen.findByRole('heading', { level: 1, name: 'VPN drops every few minutes' });
+    expect(screen.queryByRole('heading', { name: 'Conversation so far' })).not.toBeInTheDocument();
+  });
+
   it('sends a public reply', async () => {
     const api = mockApi({
       ...ticketRoutes,

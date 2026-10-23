@@ -54,6 +54,8 @@ public sealed class Ticket : TenantDocument
     public string Number { get; set; } = "";
     public string Subject { get; set; } = "";
     public string Description { get; set; } = "";
+    /// <summary>Operator-facing summary of the requester's chat before the ticket was raised. Kept apart from <see cref="Description"/>; null for tickets that did not come from a chat.</summary>
+    public string? ConversationSummary { get; set; }
     /// <summary>incident | service_request | question | problem.</summary>
     public string Type { get; set; } = TicketTypes.Incident;
     public string Status { get; set; } = TicketStatuses.New;

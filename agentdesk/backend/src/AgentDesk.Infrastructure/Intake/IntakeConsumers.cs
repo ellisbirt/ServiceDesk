@@ -69,16 +69,19 @@ public sealed class IntakeEventProcessor(TicketService tickets, ILogger<IntakeEv
             ["CorrelationId"] = evt.CorrelationId, ["TenantId"] = evt.TenantId, ["EventId"] = evt.EventId
         });
 
+        // The summary and the conversation arrive as separate fields. Events from before they existed carry only
+        // the plain-text payload, which then stays the description.
         var intake = new IntakeTicket(
             evt.TenantId,
             evt.EventId.ToString("D"),
             evt.UserId,
             string.IsNullOrWhiteSpace(evt.Subject) ? TicketSubject.FromText(evt.SanitizedPayload) : evt.Subject.Trim(),
-            evt.SanitizedPayload,
+            string.IsNullOrWhiteSpace(evt.Summary) ? evt.SanitizedPayload : evt.Summary,
             Severity: null,
             Category: null,
             evt.ConversationId.ToString("D"),
-            evt.CorrelationId);
+            evt.CorrelationId,
+            evt.ConversationSummary);
 
         var (ticket, created) = await tickets.ImportFromIntakeAsync(intake, ct);
         logger.LogInformation(created ? "Created ticket {Number} from intake" : "Intake event already imported as {Number}", ticket.Number);

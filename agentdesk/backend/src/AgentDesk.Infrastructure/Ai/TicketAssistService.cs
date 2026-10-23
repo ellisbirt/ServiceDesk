@@ -246,6 +246,8 @@ public sealed class TicketAssistService(
         sb.AppendLine($"Requester display name: {t.Requester.DisplayName}");
         sb.AppendLine(PromptInput.Wrap("ticket_subject", t.Subject));
         sb.AppendLine(PromptInput.Wrap("ticket_description", t.Description));
+        if (!string.IsNullOrWhiteSpace(t.ConversationSummary))
+            sb.AppendLine(PromptInput.Wrap("conversation_summary", t.ConversationSummary));
 
         var comments = ctx.Timeline
             .Where(e => e.DocType == DocTypes.Comment && !string.IsNullOrWhiteSpace(e.Body))

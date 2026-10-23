@@ -54,6 +54,8 @@ export interface Ticket {
   number: string;
   subject: string;
   description: string;
+  /** Summary of the requester's chat, present on tickets raised from the intake chat. */
+  conversationSummary?: string;
   type: TicketType;
   status: TicketStatus;
   pendingReason?: string;
