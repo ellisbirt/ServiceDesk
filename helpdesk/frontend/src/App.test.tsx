@@ -34,7 +34,6 @@ const base: HelpdeskApiResponse = {
   conversationId: 'c1',
   actionLane: 'PUBLIC_TECH',
   responseText: 'Hello **world**',
-  actionCardRequired: false,
   metadata: {},
 };
 
@@ -87,81 +86,25 @@ describe('ChatMessageResponseBubble', () => {
     expect(document.querySelector('img')).toBeNull();
   });
 
-  const escalation: HelpdeskApiResponse = {
-    ...base,
-    actionLane: 'PRIVATE_CORP',
-    responseText: 'Complete the form below to send it to the service desk.',
-    metadata: { escalationToken: 't1.k.payload.mac' },
-    intakeForm: {
-      title: 'Laptop battery details',
-      submitLabel: 'Send to the service desk',
-      fields: [
-        {
-          id: 'device_model',
-          label: 'Laptop make and model',
-          description: 'For example, the model shown in Settings.',
-          inputType: 'text',
-          required: true,
-        },
-        {
-          id: 'battery_health',
-          label: 'Battery health',
-          description: 'Share the reported health or any recent changes.',
-          inputType: 'textarea',
-          required: false,
-        },
-      ],
-    },
-  };
-
-  it('sends the pending escalation with the completed form, then locks the form', async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(JSON.stringify({ ticketEventId: 'e1', status: 'queued' }), { status: 202 }));
-    render(<ChatMessageResponseBubble response={escalation} />);
-
-    expect(screen.getByRole('heading', { name: 'Laptop battery details' })).toBeInTheDocument();
-    expect(screen.queryByText(/does not submit/i)).toBeNull();
-    const model = screen.getByRole('textbox', { name: /Laptop make and model/ });
-    expect(model).toBeRequired();
-    await userEvent.type(model, ' Example laptop ');
-    await userEvent.click(screen.getByRole('button', { name: 'Send to the service desk' }));
-
-    expect(await screen.findByRole('status')).toHaveTextContent('sent to the service desk for follow-up');
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(String(url)).toMatch(/\/api\/v1\/chat\/escalate$/);
-    expect(JSON.parse(init!.body as string)).toEqual({
-      conversationId: 'c1',
-      escalationToken: 't1.k.payload.mac',
-      formTitle: 'Laptop battery details',
-      answers: [
-        { label: 'Laptop make and model', value: 'Example laptop' },
-        { label: 'Battery health', value: '' },
-      ],
-    });
-    expect(model).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Send to the service desk' })).toBeNull();
-  });
-
-  it('shows the server error and lets the user retry when sending fails', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({ errors: { escalationToken: ['This request has expired or is not valid. Please send your message again.'] } }),
-        { status: 400 },
-      ),
+  it('renders a service-desk reply as plain text with no form', () => {
+    render(
+      <ChatMessageResponseBubble
+        response={{ ...base, actionLane: 'PRIVATE_CORP', responseText: 'Which site do you need access to?' }}
+      />,
     );
-    render(<ChatMessageResponseBubble response={escalation} />);
-    await userEvent.type(screen.getByRole('textbox', { name: /Laptop make and model/ }), 'X1');
-    await userEvent.click(screen.getByRole('button', { name: 'Send to the service desk' }));
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('has expired');
-    expect(screen.getByRole('button', { name: 'Send to the service desk' })).toBeEnabled();
+    expect(screen.getByText('Which site do you need access to?')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('does not show a form without a pending escalation token', () => {
-    render(<ChatMessageResponseBubble response={{ ...escalation, metadata: {} }} />);
-    expect(screen.queryByRole('heading', { name: 'Laptop battery details' })).toBeNull();
+  it('notes when the reply raised a ticket', () => {
+    render(
+      <ChatMessageResponseBubble
+        response={{ ...base, actionLane: 'PRIVATE_CORP', metadata: { ticketRaised: 'true', ticketEventId: 'e1' } }}
+      />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Sent to the service desk');
   });
 });
 

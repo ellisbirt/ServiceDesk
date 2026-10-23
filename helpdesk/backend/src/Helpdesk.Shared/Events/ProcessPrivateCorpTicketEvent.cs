@@ -37,6 +37,19 @@ public record ProcessPrivateCorpTicketEvent
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Subject { get; init; }
 
+    /// <summary>What the requester needs now, in a sentence or two. Optional; the same text is inside <see cref="SanitizedPayload"/>.</summary>
+    [JsonPropertyName("summary")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Summary { get; init; }
+
+    /// <summary>
+    /// A short, redacted, chronological summary of the chat for the operator (what was asked, tried and said), kept
+    /// apart from <see cref="Summary"/>. Optional.
+    /// </summary>
+    [JsonPropertyName("conversationSummary")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ConversationSummary { get; init; }
+
     /// <summary>The classifier's confidence in the PRIVATE_CORP lane (0-1), when the classifier reports one.</summary>
     [JsonPropertyName("laneConfidence")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

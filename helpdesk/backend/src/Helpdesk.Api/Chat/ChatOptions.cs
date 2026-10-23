@@ -4,6 +4,15 @@ public sealed class ChatOptions
 {
     public const string SectionName = "Chat";
 
+    /// <summary>
+    /// Backstop for the service-desk hand-off interview. Once the conversation holds this many user messages the model
+    /// is told to raise the ticket now, whatever is still missing, and the pipeline raises a minimal one itself if it
+    /// asks another question anyway. The model normally decides when it has enough long before this. The history sent
+    /// back by the client is capped at <see cref="ChatRequestValidator.MaxHistoryMessages"/> messages, so the useful
+    /// range is 1 to <c>MaxHistoryMessages / 2 + 1</c>.
+    /// </summary>
+    public int MaxInterviewTurns { get; set; } = 8;
+
     /// <summary>Jobs processed at once. Jobs mostly wait on the network, so this can be well above the core count.</summary>
     public int MaxConcurrentJobs { get; set; } = 32;
 

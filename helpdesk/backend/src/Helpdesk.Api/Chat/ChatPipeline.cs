@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using Helpdesk.Core;
 using Helpdesk.Core.Interfaces;
 using Helpdesk.Infrastructure.Ai;
 using Helpdesk.Infrastructure.Kb;
 using Helpdesk.Shared.Contracts;
+using Helpdesk.Shared.Events;
 using Microsoft.Extensions.Options;
 
 namespace Helpdesk.Api.Chat;
@@ -18,13 +21,14 @@ public sealed class UnsupportedLaneException(string lane) : Exception($"Unsuppor
 public sealed class ChatPipeline(
     IGuardrailRouterService guardrailService,
     IPublicInferenceService inferenceService,
-    IIntakeFormGenerator intakeFormGenerator,
+    ITicketInterviewer ticketInterviewer,
+    ITicketQueuePublisher queuePublisher,
     ILiveSearchService searchService,
     ISensitiveDataRedactor redactor,
     IConversationSigner signer,
-    EscalationTokens escalationTokens,
     IKnowledgeBaseSearch knowledgeBase,
     IOptions<KbOptions> kbOptions,
+    IOptions<ChatOptions> chatOptions,
     ILogger<ChatPipeline> logger)
 {
     public async Task<HelpdeskApiResponse> RunAsync(
@@ -101,24 +105,10 @@ public sealed class ChatPipeline(
                 break;
 
             case ActionLanes.PrivateCorp:
-                // From the original text, not the model's copy: the queue has its own policy, which may keep
-                // values (such as a contact number) that the model never needed.
-                var queuePayload = Sanitize(original.MessageText, EgressDestination.Queue, tenantId);
-                // Nothing is queued yet: the ticket is raised only once the follow-up form is submitted
-                // (POST /api/v1/chat/escalate), with the request and the answers together.
-                logger.LogInformation("Private infrastructure request awaiting follow-up form for Tenant: {TenantId}", tenantId);
-                // Articles that may already solve it are offered next to the form; submitting the form is still the agreed path.
+                // The model leads the hand-off: it asks for whatever is missing, and raises the ticket itself once
+                // it has enough. Nothing is queued before it decides.
                 kbHits = await RetrieveKnowledgeAsync(request, tenantId, ct);
-                response = Reply(request, ActionLanes.PrivateCorp, Prompts.EscalationPending + KnowledgeBaseReply.Articles(kbHits)) with
-                {
-                    IntakeForm = await TryGenerateFormAsync(
-                        FormContext(request), lane, tenantId, ct, userAgent)
-                        ?? FallbackForm,
-                    Metadata = new()
-                    {
-                        [EscalationTokenMetadataKey] = escalationTokens.Issue(tenantId, userId, request.ConversationId, queuePayload)
-                    }
-                };
+                response = await HandOffAsync(original, request, tenantId, userId, ct, userAgent, kbHits);
                 break;
 
             default:
@@ -147,48 +137,99 @@ public sealed class ChatPipeline(
         return knowledgeBase.SearchAsync(tenantId, string.Join("\n", earlier.Append(request.MessageText)), ct);
     }
 
-    /// <summary>Response metadata key holding the pending escalation's token, which the form submission must return.</summary>
-    public const string EscalationTokenMetadataKey = "escalationToken";
+    /// <summary>Response metadata key set to "true" on the reply that raised the ticket.</summary>
+    public const string TicketRaisedMetadataKey = "ticketRaised";
 
-    /// <summary>Used when no tailored form can be generated, so the request can still be sent.</summary>
-    public static readonly IntakeForm FallbackForm = new()
-    {
-        Title = "Request details",
-        SubmitLabel = "Send to the service desk",
-        Fields =
-        [
-            new IntakeFormField
-            {
-                Id = "issue_details",
-                Label = "What is the issue?",
-                Description = "Describe what happened, when it started, who or what is affected, and any steps already tried.",
-                InputType = "textarea"
-            }
-        ]
-    };
+    /// <summary>Response metadata key holding the queued ticket event's id, set when a ticket was raised.</summary>
+    public const string TicketEventIdMetadataKey = "ticketEventId";
 
-    // A form failure falls back to a generic form rather than failing the reply.
-    private async Task<IntakeForm?> TryGenerateFormAsync(
-        string text, string lane, string tenantId, CancellationToken ct, string? userAgent)
+    private async Task<HelpdeskApiResponse> HandOffAsync(
+        ChatMessageRequest original, ChatMessageRequest request, string tenantId, string userId, CancellationToken ct,
+        string? userAgent, IReadOnlyList<KbHit> kbHits)
     {
-        try
+        // The model decides when it has enough; this only stops an interview that never ends.
+        var userTurns = request.ConversationHistory.Count(m => m.Role == "user") + 1;
+        var mustRaise = userTurns >= chatOptions.Value.MaxInterviewTurns;
+        var interview = await ticketInterviewer.InterviewAsync(Transcript(request), ct, userAgent, mustRaise);
+        if (mustRaise && !interview.RaiseTicket)
         {
-            return await intakeFormGenerator.GenerateAsync(text, lane, ct, userAgent);
+            logger.LogWarning(
+                "The interviewer kept asking after {Turns} user messages; raising a minimal ticket for Tenant: {TenantId}",
+                userTurns, tenantId);
+            interview = MinimalTicket(request);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        if (!interview.RaiseTicket)
         {
-            logger.LogWarning(ex, "Follow-up form could not be generated for an escalated request for Tenant: {TenantId}", tenantId);
-            return null;
+            logger.LogInformation("Gathering details for a service-desk ticket for Tenant: {TenantId}", tenantId);
+            return Reply(request, ActionLanes.PrivateCorp, interview.Message + KnowledgeBaseReply.Articles(kbHits));
         }
+
+        string Clean(string text) => Sanitize(text, EgressDestination.Queue, tenantId);
+
+        // The operator gets the model's summaries rather than the transcript. They are built from the Model-redacted
+        // conversation and redacted again here for the queue, so a secret never reaches the ticket.
+        var summary = Clean(interview.Summary!);
+        var conversationSummary = interview.ConversationSummary is { } history ? Clean(history) : null;
+        var answers = new List<TicketDetailAnswer> { new() { Label = "Summary", Value = summary } };
+        if (conversationSummary is not null)
+            answers.Add(new TicketDetailAnswer { Label = "Conversation so far", Value = conversationSummary });
+        if (interview.RecommendedAction is { } action)
+            answers.Add(new TicketDetailAnswer { Label = "Recommended action", Value = Clean(action) });
+        if (interview.StepsTried is { } tried)
+            answers.Add(new TicketDetailAnswer { Label = "Steps already tried", Value = Clean(tried) });
+        var details = new TicketDetails { Title = Clean(interview.Title!), Answers = answers };
+
+        var ticketEvent = new ProcessPrivateCorpTicketEvent
+        {
+            // Derived from the conversation position, so a retried request queues the same event rather than a second one.
+            EventId = EventIdFor(tenantId, userId, original.ConversationId, original.ConversationHistory.Count),
+            TenantId = tenantId,
+            UserId = userId,
+            ConversationId = original.ConversationId,
+            CorrelationId = Activity.Current?.GetTagItem("helpdesk.correlation_id")?.ToString()
+                ?? Activity.Current?.TraceId.ToString()
+                ?? Guid.NewGuid().ToString("N"),
+            SanitizedPayload = details.ToText(),
+            Subject = TicketSubject.FromText(details.Title),
+            Summary = summary,
+            ConversationSummary = conversationSummary,
+            Details = details
+        };
+        await queuePublisher.PublishAsync(ticketEvent, ct);
+        logger.LogInformation("Service-desk ticket queued after conversation for Tenant: {TenantId}", tenantId);
+
+        var reply = Reply(request, ActionLanes.PrivateCorp, interview.Message + KnowledgeBaseReply.Articles(kbHits));
+        reply.Metadata[TicketRaisedMetadataKey] = "true";
+        reply.Metadata[TicketEventIdMetadataKey] = ticketEvent.EventId.ToString();
+        return reply;
     }
 
-    private static string FormContext(ChatMessageRequest request)
-    {
-        if (request.ConversationHistory.Count == 0) return request.MessageText;
+    private const int MaxTranscriptMessages = 12;
 
-        var context = string.Join("\n", request.ConversationHistory.TakeLast(6)
-            .Select(message => $"{message.Role}: {message.Content}"));
-        return $"{context}\nuser: {request.MessageText}";
+    /// <summary>
+    /// Used only when the model ignores an instruction to raise the ticket. Built from the Model-redacted messages, so
+    /// nothing is summarised: the operator gets the start of each message instead.
+    /// </summary>
+    private static TicketInterview MinimalTicket(ChatMessageRequest request)
+    {
+        var userMessages = request.ConversationHistory.Where(m => m.Role == "user").Select(m => m.Content)
+            .Append(request.MessageText).ToList();
+        static string Brief(string text) => text.Length <= 300 ? text : text[..300] + "…";
+        return new TicketInterview(
+            true, Prompts.TicketRaisedWithoutInterview, TicketSubject.FromText(userMessages[0]),
+            "The user needs help from the service desk. The assistant could not complete its questions, so details may be missing.",
+            string.Join("\n", userMessages.TakeLast(MaxTranscriptMessages).Select(m => $"- {Brief(m)}")), null, null);
+    }
+
+    private static string Transcript(ChatMessageRequest request) =>
+        string.Join("\n", request.ConversationHistory.TakeLast(MaxTranscriptMessages)
+            .Select(m => $"{m.Role}: {m.Content}")
+            .Append($"user: {request.MessageText}"));
+
+    private static Guid EventIdFor(string tenantId, string userId, Guid conversationId, int historyCount)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"{tenantId}\n{userId}\n{conversationId:N}\n{historyCount}"));
+        return new Guid(hash.AsSpan(0, 16));
     }
 
     private ChatMessageRequest Redact(ChatMessageRequest request, string tenantId)

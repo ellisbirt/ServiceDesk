@@ -81,9 +81,13 @@ public class RedactionTests
     [InlineData("NI number AB 12 34 56 C", "AB 12 34 56 C", "[REDACTED:id]")]
     [InlineData("pay to GB82 WEST 1234 5698 7654 32 today", "GB82 WEST 1234 5698 7654 32", "[REDACTED:iban]")]
     [InlineData("pay to DE89370400440532013000", "DE89370400440532013000", "[REDACTED:iban]")]
-    public void GovernmentIds_AndIbans_AreRemovedForEveryDestination(string input, string leaked, string marker)
+    public void GovernmentIds_AndIbans_AreKeptForModelAndQueue_ButRemovedForSearchAndEmbedding(string input, string leaked, string marker)
     {
-        foreach (var destination in Enum.GetValues<EgressDestination>())
+        foreach (var destination in new[] { EgressDestination.Model, EgressDestination.Queue })
+        {
+            Assert.Equal(input, Redactor.Redact(input, destination).Text);
+        }
+        foreach (var destination in new[] { EgressDestination.Search, EgressDestination.Embedding })
         {
             var result = Redactor.Redact(input, destination);
             Assert.DoesNotContain(leaked, result.Text);
@@ -202,31 +206,24 @@ public class RedactionTests
             Content = JsonContent.Create(new { messageText = text, conversationId = Guid.NewGuid(), conversationHistory = history ?? Array.Empty<object>() })
         };
 
+    private static string TicketText(ApiFactory f) => f.Publisher.Sent.Single().SanitizedPayload;
+
+    // A model that copies what it was shown into the ticket, so what reaches the queue shows what the redaction left in.
+    private static void EchoConversation(ApiFactory f) =>
+        f.Interviewer.Handler = c => new Helpdesk.Core.Interfaces.TicketInterview(true, "Sent.", "Ticket", c, c, null, null);
+
     [Fact]
     public async Task PrivateCorp_Ticket_NeverContainsTheSecret()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        EchoConversation(f);
         var res = await f.CreateClient().SendAsync(Request("VPN fails, password=hunter2"));
 
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Empty(f.Publisher.Sent);
-        var evt = new { SanitizedPayload = await PendingPayload(f, res) };
-        Assert.Equal("VPN fails, password=[REDACTED:secret]", evt.SanitizedPayload);
+        Assert.Contains("password=[REDACTED:secret]", TicketText(f));
+        Assert.DoesNotContain("hunter2", TicketText(f));
     }
-
-    [Fact]
-    public async Task PrivateCorp_Reply_AsksTheUserToCompleteTheForm()
-    {
-        using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var body = await (await f.CreateClient().SendAsync(Request("VPN is down"))).Content.ReadFromJsonAsync<HelpdeskApiResponse>();
-
-        Assert.Contains("Complete the form", body!.ResponseText);
-    }
-
-    private static async Task<string?> PendingPayload(ApiFactory f, HttpResponseMessage res) =>
-        f.PendingEscalation("dev-tenant", "dev-user", (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!)?.Payload;
 
     [Fact]
     public async Task Classifier_ReceivesRedactedMessageAndHistory()
@@ -270,13 +267,15 @@ public class RedactionTests
     {
         using var permissive = new ApiFactory();
         permissive.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var permissiveRes = await permissive.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
-        Assert.Contains("bob@example.com", await PendingPayload(permissive, permissiveRes));
+        EchoConversation(permissive);
+        await permissive.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
+        Assert.Contains("bob@example.com", TicketText(permissive));
 
         using var strict = new ApiFactory(settings: new Dictionary<string, string> { ["Dlp:Destinations:Queue:Email"] = "Redact" });
         strict.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var strictRes = await strict.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
-        Assert.DoesNotContain("bob@example.com", await PendingPayload(strict, strictRes));
+        EchoConversation(strict);
+        await strict.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
+        Assert.DoesNotContain("bob@example.com", TicketText(strict));
     }
 
     [Fact]

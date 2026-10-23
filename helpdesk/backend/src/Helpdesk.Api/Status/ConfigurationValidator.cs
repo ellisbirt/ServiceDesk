@@ -343,6 +343,9 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
         check(o.MaxJobsPerTenant >= 1 && o.FinalEventTimeoutSeconds >= 1, area, "TenantLimit",
             $"One tenant may have {o.MaxJobsPerTenant} requests in flight.",
             "Chat:MaxJobsPerTenant and Chat:FinalEventTimeoutSeconds must be at least 1.");
+        check(o.MaxInterviewTurns >= 1 && o.MaxInterviewTurns <= ChatRequestValidator.MaxHistoryMessages / 2 + 1, area, "InterviewTurns",
+            "The service-desk interview backstop is within what the conversation history can hold.",
+            $"Chat:MaxInterviewTurns must be between 1 and {ChatRequestValidator.MaxHistoryMessages / 2 + 1}; the history sent back holds at most {ChatRequestValidator.MaxHistoryMessages} messages, so a higher value would never trigger.");
         check(o.MaxJobsPerTenant < o.MaxConcurrentJobs + o.QueueCapacity, area, "TenantLimitProtects",
             "The per-tenant limit is below total capacity, so one tenant cannot take all of it.",
             "Chat:MaxJobsPerTenant is not below Chat:MaxConcurrentJobs plus Chat:QueueCapacity, so it cannot stop one tenant taking every slot.",

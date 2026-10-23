@@ -5,27 +5,11 @@ export interface HelpdeskApiResponse {
   conversationId: string;
   actionLane: ActionLane;
   responseText: string;
-  actionCardRequired: boolean;
-  intakeForm?: IntakeForm;
   metadata: Record<string, string>;
   /** Signature of the user's message in this turn. Store it with that message and send it back as history. */
   userSig?: string;
   /** Signature of `responseText`. Store it with the assistant message and send it back as history. */
   assistantSig?: string;
-}
-
-export interface IntakeForm {
-  title: string;
-  submitLabel: string;
-  fields: IntakeFormField[];
-}
-
-export interface IntakeFormField {
-  id: string;
-  label: string;
-  description: string;
-  inputType: 'text' | 'textarea';
-  required: boolean;
 }
 
 export interface ChatHistoryMessage {
@@ -95,38 +79,8 @@ export async function sendChatMessage(
   return (await res.json()) as HelpdeskApiResponse;
 }
 
-export const ESCALATION_TOKEN_METADATA_KEY = 'escalationToken';
-
-export interface EscalationRequest {
-  conversationId: string;
-  escalationToken: string;
-  formTitle: string;
-  answers: { label: string; value: string }[];
-}
-
-export interface EscalationResponse {
-  ticketEventId: string;
-  status: string;
-}
-
-/** Sends a pending escalation and its completed form to the service desk as one ticket. */
-export async function submitEscalation(
-  request: EscalationRequest,
-  authHeaders: () => Promise<Record<string, string>>,
-  signal?: AbortSignal,
-): Promise<EscalationResponse> {
-  const res = await fetch(`${baseUrl}/api/v1/chat/escalate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-    body: JSON.stringify(request),
-    signal,
-  });
-
-  if (!res.ok) {
-    throw new ApiError(await errorMessage(res), res.status);
-  }
-  return (await res.json()) as EscalationResponse;
-}
+/** Metadata key set to 'true' on the reply that raised a service-desk ticket. */
+export const TICKET_RAISED_METADATA_KEY = 'ticketRaised';
 
 export async function probeServiceReadiness(signal?: AbortSignal): Promise<boolean> {
   try {

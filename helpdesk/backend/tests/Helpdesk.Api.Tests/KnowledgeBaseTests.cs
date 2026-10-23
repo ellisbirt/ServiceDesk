@@ -377,19 +377,19 @@ public class KnowledgeBasePipelineTests
     }
 
     [Fact]
-    public async Task PrivateCorp_OffersArticlesNextToTheForm_AndStillWaitsForTheForm()
+    public async Task PrivateCorp_OffersArticlesAlongsideTheInterviewReply()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
         f.KnowledgeBase.Hits = [Hit("KB0002002", "Request SharePoint access")];
+        f.Interviewer.Handler = _ => new TicketInterview(false, "Which site do you need?", null, null, null, null, null);
 
         var res = await f.CreateClient().SendAsync(Post("I need access to the Finance SharePoint site"));
         var body = (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
 
         Assert.Contains("KB0002002", body.ResponseText);
         Assert.Contains("Request SharePoint access", body.ResponseText);
-        Assert.NotNull(body.IntakeForm);
-        Assert.Contains("escalationToken", body.Metadata.Keys);
+        Assert.StartsWith("Which site do you need?", body.ResponseText);
         Assert.Empty(f.Publisher.Sent);
     }
 
@@ -398,11 +398,12 @@ public class KnowledgeBasePipelineTests
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.Interviewer.Handler = _ => new TicketInterview(false, "Which VPN client do you use?", null, null, null, null, null);
 
         var res = await f.CreateClient().SendAsync(Post("VPN is down"));
         var body = (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
 
-        Assert.Equal(Helpdesk.Infrastructure.Ai.Prompts.EscalationPending, body.ResponseText);
+        Assert.Equal("Which VPN client do you use?", body.ResponseText);
         Assert.DoesNotContain(Helpdesk.Api.Chat.ChatPipeline.KnowledgeBaseMetadataKey, body.Metadata.Keys);
     }
 

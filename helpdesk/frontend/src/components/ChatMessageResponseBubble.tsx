@@ -1,7 +1,6 @@
 import type { FC } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { ESCALATION_TOKEN_METADATA_KEY, type ActionLane, type HelpdeskApiResponse } from '../lib/api';
-import { IntakeFormCard } from './IntakeFormCard';
+import { TICKET_RAISED_METADATA_KEY, type ActionLane, type HelpdeskApiResponse } from '../lib/api';
 
 const LANE_LABELS: Record<ActionLane, string> = {
   POLICY_VIOLATION: 'Policy',
@@ -44,12 +43,10 @@ export const ChatMessageResponseBubble: FC<{
         </button>
       )}
 
-      {response.intakeForm && response.metadata?.[ESCALATION_TOKEN_METADATA_KEY] && (
-        <IntakeFormCard
-          form={response.intakeForm}
-          conversationId={response.conversationId}
-          escalationToken={response.metadata[ESCALATION_TOKEN_METADATA_KEY]}
-        />
+      {response.metadata?.[TICKET_RAISED_METADATA_KEY] === 'true' && (
+        <p role="status" className="mt-3 text-xs text-zinc-400">
+          Sent to the service desk
+        </p>
       )}
     </div>
   );

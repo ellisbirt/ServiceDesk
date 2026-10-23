@@ -66,13 +66,13 @@ public static class DependencyInjection
             services.AddScoped<IChatProvider>(sp => sp.GetRequiredService<ILlmProviderRouter>().GetChat(ChatRole));
             services.AddScoped<IGuardrailRouterService, AnthropicGuardrailRouterService>();
             services.AddScoped<IPublicInferenceService, AnthropicPublicInferenceService>();
-            services.AddScoped<IIntakeFormGenerator, AnthropicIntakeFormGenerator>();
+            services.AddScoped<ITicketInterviewer, AnthropicTicketInterviewer>();
         }
         else
         {
             services.AddScoped<IGuardrailRouterService, OfflineGuardrailRouterService>();
             services.AddScoped<IPublicInferenceService, OfflinePublicInferenceService>();
-            services.AddScoped<IIntakeFormGenerator, OfflineIntakeFormGenerator>();
+            services.AddScoped<ITicketInterviewer, OfflineTicketInterviewer>();
         }
 
         services.AddLiveSearch(config);

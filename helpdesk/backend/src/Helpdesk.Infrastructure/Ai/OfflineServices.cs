@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Helpdesk.Core.Interfaces;
 using Helpdesk.Shared.Contracts;
+using Helpdesk.Shared.Events;
 using Microsoft.Extensions.Logging;
 
 namespace Helpdesk.Infrastructure.Ai;
@@ -101,95 +102,25 @@ public sealed class OfflinePublicInferenceService : IPublicInferenceService
     }
 }
 
-public sealed partial class OfflineIntakeFormGenerator : IIntakeFormGenerator
+/// <summary>
+/// Offline stand-in: asks one question, then raises the ticket on the next user message. Real behaviour needs a model.
+/// </summary>
+public sealed class OfflineTicketInterviewer : ITicketInterviewer
 {
-    [GeneratedRegex(@"\b(access|permission|permissions|grant|membership)\b", RegexOptions.IgnoreCase, matchTimeoutMilliseconds: 100)]
-    private static partial Regex AccessRequestRegex();
-
-    public Task<IntakeForm> GenerateAsync(
-        string userInput, string lane, CancellationToken cancellationToken = default, string? userAgent = null) =>
-        Task.FromResult(lane == ActionLanes.PrivateCorp && AccessRequestRegex().IsMatch(userInput)
-            ? new IntakeForm
-            {
-                Title = "Work system access request",
-                SubmitLabel = "Send to the service desk",
-                Fields =
-                [
-                    new IntakeFormField
-                    {
-                        Id = "target_system",
-                        Label = "Which system, site or files do you need access to?",
-                        Description = "Name the system and any specific site, library or folder.",
-                        InputType = "text",
-                        Required = true
-                    },
-                    new IntakeFormField
-                    {
-                        Id = "access_level",
-                        Label = "What level of access do you need?",
-                        Description = "Say whether you need to view or edit, and name any specific libraries or folders.",
-                        InputType = "textarea",
-                        Required = true
-                    },
-                    new IntakeFormField
-                    {
-                        Id = "business_reason",
-                        Label = "Why do you need this access?",
-                        Description = "Describe the work task or business reason.",
-                        InputType = "textarea",
-                        Required = true
-                    },
-                    new IntakeFormField
-                    {
-                        Id = "work_account",
-                        Label = "Which work account should receive access?",
-                        Description = "Enter your work email or sign-in name only; never include a password or code.",
-                        InputType = "text",
-                        Required = true
-                    },
-                    new IntakeFormField
-                    {
-                        Id = "approval_status",
-                        Label = "Has your manager or the site owner approved this?",
-                        Description = "If yes, share the approver's name or team; otherwise say approval is still needed.",
-                        InputType = "textarea"
-                    },
-                    new IntakeFormField
-                    {
-                        Id = "access_end_date",
-                        Label = "When should this access end?",
-                        Description = "Give an end date, or say if access is only needed through quarterly close.",
-                        InputType = "text"
-                    }
-                ]
-            }
-            : new IntakeForm
+    public Task<TicketInterview> InterviewAsync(string conversation, CancellationToken cancellationToken = default, string? userAgent = null, bool mustRaise = false)
+    {
+        var userMessages = conversation.Split('\n')
+            .Where(l => l.StartsWith("user:", StringComparison.Ordinal))
+            .Select(l => l["user:".Length..].Trim())
+            .ToList();
+        if (userMessages.Count < 2 && !mustRaise)
         {
-            Title = "Issue details",
-            SubmitLabel = "Send to the service desk",
-            Fields =
-            [
-                new IntakeFormField
-                {
-                    Id = "issue_details",
-                    Label = "What is the issue?",
-                    Description = "Describe what happened, when it started, and who or what is affected.",
-                    InputType = "textarea"
-                },
-                new IntakeFormField
-                {
-                    Id = "steps_tried",
-                    Label = "What have you tried so far?",
-                    Description = "Include any steps that changed the issue.",
-                    InputType = "textarea"
-                },
-                new IntakeFormField
-                {
-                    Id = "additional_details",
-                    Label = "Anything else we should know?",
-                    Description = "Add details that could help resolve your request.",
-                    InputType = "textarea"
-                }
-            ]
-        });
+            return Task.FromResult(new TicketInterview(
+                false, "_Offline mode._ Could you tell me a little more about what you need and when it started?", null, null, null, null, null));
+        }
+
+        return Task.FromResult(new TicketInterview(
+            true, "_Offline mode._ I've passed this to the service desk.", TicketSubject.FromText(userMessages[0]),
+            userMessages[^1], string.Join("\n", userMessages.Select(m => $"- {m}")), null, null));
+    }
 }

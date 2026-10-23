@@ -91,8 +91,6 @@ builder.Services.AddSignalR(o =>
 builder.Services.Configure<ConversationSigningOptions>(config.GetSection(ConversationSigningOptions.SectionName));
 builder.Services.AddSingleton<IConversationSigner, ConversationSigner>();
 builder.Services.AddScoped<ChatPipeline>();
-builder.Services.AddSingleton<EscalationTokens>();
-builder.Services.AddScoped<EscalationSubmitter>();
 builder.Services.AddSingleton<TenantJobLimiter>();
 builder.Services.AddSingleton<ChatJobQueue>();
 builder.Services.AddSingleton<ChatRequestLimiter>();

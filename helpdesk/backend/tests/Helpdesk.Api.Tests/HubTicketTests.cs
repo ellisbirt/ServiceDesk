@@ -272,8 +272,9 @@ public class HubTicketFlowTests
 
         Assert.NotNull(ack.RequestId);
         Assert.Equal(ChatEventTypes.Completed, events[^1].Type);
-        Assert.Empty(f.Publisher.Sent);
-        Assert.NotNull(f.PendingEscalation("tenant-z", "alice", events[^1].Response!));
+        var evt = Assert.Single(f.Publisher.Sent);
+        Assert.Equal("tenant-z", evt.TenantId);
+        Assert.Equal("alice", evt.UserId);
     }
 
     [Fact]

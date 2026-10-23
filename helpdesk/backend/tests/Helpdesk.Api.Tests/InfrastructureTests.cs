@@ -47,7 +47,7 @@ public class GuardrailRouterTests
         Assert.Equal("coaching text", text);
         Assert.Equal(2, client.SystemPrompts.Count);
         Assert.Contains("Offers to help prepare and raise that request", client.SystemPrompts[1]);
-        Assert.Contains("select the \"Start an access request\" button below to open the service-desk form", client.SystemPrompts[1]);
+        Assert.Contains("describe what they need here and you will gather the details", client.SystemPrompts[1]);
         Assert.Contains("request approved access to those files using their own account", client.SystemPrompts[1]);
     }
 
@@ -60,7 +60,8 @@ public class GuardrailRouterTests
         Assert.Equal(ActionLanes.PolicyViolation, lane);
         Assert.Equal(Prompts.ComplianceFallback, text);
         Assert.Contains("request approved access to the files you need", text);
-        Assert.Contains("Start an access request", text);
+        Assert.DoesNotContain("button", text);
+        Assert.Contains("I'll pass the request to the service desk", text);
     }
 
     [Fact]
@@ -71,7 +72,7 @@ public class GuardrailRouterTests
         Assert.Contains("Acknowledge steps already tried", Prompts.PublicTech);
         Assert.Contains("Do not escalate just because the first check failed", Prompts.PublicTech);
         Assert.Contains("continue with the next useful safe check", Prompts.PublicTech);
-        Assert.Contains("Only then explain the constraint and direct the user to the service-desk request form", Prompts.PublicTech);
+        Assert.Contains("Only then explain the constraint and offer to raise a ticket with the service desk", Prompts.PublicTech);
     }
 
     [Fact]

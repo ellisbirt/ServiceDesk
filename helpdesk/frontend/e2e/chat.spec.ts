@@ -5,7 +5,6 @@ const reply = {
   conversationId: 'c1',
   actionLane: 'PUBLIC_TECH',
   responseText: 'Try holding the power button for **15 seconds**.',
-  actionCardRequired: false,
   metadata: {},
 };
 

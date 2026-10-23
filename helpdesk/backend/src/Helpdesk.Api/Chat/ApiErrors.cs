@@ -15,8 +15,8 @@ public static class ApiErrors
             new(StatusCodes.Status500InternalServerError, "An unsupported processing lane was returned.", "unsupported_lane"),
         GuardrailClassificationException =>
             new(StatusCodes.Status503ServiceUnavailable, "Message could not be safely classified. Please try again.", "classification_failed"),
-        IntakeFormGenerationException =>
-            new(StatusCodes.Status502BadGateway, "A follow-up form could not be prepared. Please try again.", "form_generation_failed"),
+        TicketInterviewException =>
+            new(StatusCodes.Status502BadGateway, "Your request could not be prepared for the service desk. Please try again.", "interview_failed"),
         UpstreamRateLimitedException =>
             new(StatusCodes.Status429TooManyRequests, "The AI service is busy right now. Please try again in a few minutes.", "rate_limited"),
         // Must precede the IOException case: BadHttpRequestException derives from IOException.

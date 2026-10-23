@@ -3,11 +3,11 @@ namespace Helpdesk.Dlp;
 
 /// <summary>
 /// Overrides for what is redacted where. Only overrides go in configuration; the defaults live in
-/// <see cref="DlpPolicy"/>. Names are case-insensitive: destinations are <c>Model</c>, <c>Search</c>, <c>Queue</c>, <c>Embedding</c>;
+/// <see cref="DlpPolicy"/> (secrets and cards everywhere; everything else only for <c>Search</c> and <c>Embedding</c>). Names are case-insensitive: destinations are <c>Model</c>, <c>Search</c>, <c>Queue</c>, <c>Embedding</c>;
 /// categories are <c>GovernmentId</c>, <c>Iban</c>, <c>Email</c>, <c>Phone</c>; actions are <c>Redact</c>, <c>Allow</c>.
 /// <code>
 /// "Dlp": {
-///   "Destinations": { "Model": { "Email": "Redact" } },
+///   "Destinations": { "Model": { "GovernmentId": "Redact" } },
 ///   "Tenants": { "contoso-guid": { "Queue": { "Phone": "Redact" } } }
 /// }
 /// </code>
@@ -37,10 +37,11 @@ public sealed class DlpPolicy
 
     public static DlpAction Default(DlpCategory category, EgressDestination destination) => category switch
     {
-        // Work email addresses and phone numbers are often what an IT problem is about, so the model and the
-        // ticket keep them; a third-party search engine and stored KB vectors never need them.
-        DlpCategory.Email or DlpCategory.Phone => destination is EgressDestination.Search or EgressDestination.Embedding ? DlpAction.Redact : DlpAction.Allow,
-        _ => DlpAction.Redact
+        // Redaction loses information the model and the support team need (an email address, a phone number, an
+        // account number is often what the problem is about), so only true secrets and cards are removed by
+        // default. A third-party search engine and stored KB vectors never need personal data, so they still get it removed.
+        DlpCategory.Secret or DlpCategory.Card => DlpAction.Redact,
+        _ => destination is EgressDestination.Search or EgressDestination.Embedding ? DlpAction.Redact : DlpAction.Allow
     };
 
     public DlpPolicy(DlpOptions options)

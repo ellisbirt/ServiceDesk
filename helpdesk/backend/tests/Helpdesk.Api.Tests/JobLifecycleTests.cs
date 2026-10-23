@@ -290,7 +290,7 @@ internal sealed class ProcessorRig : IAsyncDisposable
         services.AddLogging();
         services.AddSingleton<IGuardrailRouterService>(new FakeRouter());
         services.AddSingleton<IPublicInferenceService>(Inference);
-        services.AddSingleton<IIntakeFormGenerator>(new FakeIntakeFormGenerator());
+        services.AddSingleton<ITicketInterviewer>(new FakeTicketInterviewer());
         services.AddSingleton<ILiveSearchService>(new FakeSearch());
         services.AddSingleton<IKnowledgeBaseSearch>(new FakeKnowledgeBase());
         services.AddSingleton(Options.Create(new Helpdesk.Infrastructure.Kb.KbOptions()));
@@ -299,7 +299,6 @@ internal sealed class ProcessorRig : IAsyncDisposable
         services.AddSingleton<IConversationSigner>(new ConversationSigner(
             Options.Create(new ConversationSigningOptions()), new DevEnvironment(), NullLogger<ConversationSigner>.Instance));
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton<EscalationTokens>();
         services.AddScoped<ChatPipeline>();
         _services = services.BuildServiceProvider();
 

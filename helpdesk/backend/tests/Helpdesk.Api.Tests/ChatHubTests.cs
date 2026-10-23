@@ -359,7 +359,7 @@ public class ChatHubTests
     }
 
     [Fact]
-    public async Task PrivateCorp_WaitsForTheForm_WithATokenBoundToTheConnectionsTenantAndUser()
+    public async Task PrivateCorp_QueuesTheTicket_ForTheConnectionsTenantAndUser()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
@@ -369,11 +369,10 @@ public class ChatHubTests
         var events = await client.UntilTerminalAsync();
 
         Assert.Equal(ChatEventTypes.Completed, events[^1].Type);
-        Assert.Empty(f.Publisher.Sent);
-        var reply = events[^1].Response!;
-        Assert.NotNull(reply.IntakeForm);
-        Assert.Equal("vpn is down", f.PendingEscalation("tenant-z", "alice", reply)!.Payload);
-        Assert.Null(f.PendingEscalation("tenant-z", "bob", reply));
+        var evt = Assert.Single(f.Publisher.Sent);
+        Assert.Equal("tenant-z", evt.TenantId);
+        Assert.Equal("alice", evt.UserId);
+        Assert.Equal("true", events[^1].Response!.Metadata[Helpdesk.Api.Chat.ChatPipeline.TicketRaisedMetadataKey]);
     }
 
     [Fact]

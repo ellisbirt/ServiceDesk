@@ -90,44 +90,28 @@ public sealed class FakeSearch : ILiveSearchService
     }
 }
 
-public sealed class FakeIntakeFormGenerator : IIntakeFormGenerator
+public sealed class FakeTicketInterviewer : ITicketInterviewer
 {
-    public string? LastInput { get; private set; }
-    public string? LastLane { get; private set; }
+    public string? LastConversation { get; private set; }
     public string? LastUserAgent { get; private set; }
+    public int Calls { get; private set; }
     public Exception? Failure { get; set; }
-    public Task<IntakeForm> GenerateAsync(
-        string userInput, string lane, CancellationToken cancellationToken = default, string? userAgent = null)
+    public bool? LastMustRaise { get; private set; }
+
+    /// <summary>Defaults to raising a ticket straight away; tests that want a question replace it.</summary>
+    public Func<string, TicketInterview> Handler { get; set; } = _ => new TicketInterview(
+        true, "I've sent this to the service desk.", "VPN is down", "The user cannot connect to the corporate VPN.",
+        "- User reported the VPN is down.", "Check the user's VPN profile.", null);
+
+    public Task<TicketInterview> InterviewAsync(
+        string conversation, CancellationToken cancellationToken = default, string? userAgent = null, bool mustRaise = false)
     {
-        if (Failure is not null) return Task.FromException<IntakeForm>(Failure);
-        LastInput = userInput;
-        LastLane = lane;
+        Calls++;
+        LastMustRaise = mustRaise;
+        if (Failure is not null) return Task.FromException<TicketInterview>(Failure);
+        LastConversation = conversation;
         LastUserAgent = userAgent;
-        return Task.FromResult(new IntakeForm
-        {
-            Title = userInput.Contains("battery", StringComparison.OrdinalIgnoreCase)
-                ? "Laptop battery details"
-                : "Issue details",
-            SubmitLabel = "Save details",
-            Fields =
-            [
-                new IntakeFormField
-                {
-                    Id = "device_model",
-                    Label = "Device model",
-                    Description = "The model shown in your device settings.",
-                    InputType = "text",
-                    Required = true
-                },
-                new IntakeFormField
-                {
-                    Id = "details",
-                    Label = "Additional details",
-                    Description = "Anything else that could help.",
-                    InputType = "textarea"
-                }
-            ]
-        });
+        return Task.FromResult(Handler(conversation));
     }
 }
 
@@ -163,19 +147,13 @@ public sealed class ApiFactory(
     public FakeInference Inference { get; } = new();
     public FakeSearch Search { get; } = new();
     public FakeKnowledgeBase KnowledgeBase { get; } = new();
-    public FakeIntakeFormGenerator FormGenerator { get; } = new();
+    public FakeTicketInterviewer Interviewer { get; } = new();
     public CapturingSink Logs { get; } = new();
 
     /// <summary>History the server will trust: signed the way the server signs the turns it produces.</summary>
     public IReadOnlyList<ChatHistoryMessage> SignedHistory(
         string tenant, string user, Guid conversationId, params (string Role, string Content)[] messages) =>
         Services.GetRequiredService<Helpdesk.Api.Chat.IConversationSigner>().SignHistory(tenant, user, conversationId, messages);
-
-    /// <summary>The escalation a PRIVATE_CORP reply is holding back until its form is submitted, if its token is valid.</summary>
-    public Helpdesk.Api.Chat.PendingEscalation? PendingEscalation(string tenant, string user, HelpdeskApiResponse reply) =>
-        Services.GetRequiredService<Helpdesk.Api.Chat.EscalationTokens>().Redeem(
-            tenant, user, reply.ConversationId,
-            reply.Metadata.GetValueOrDefault(Helpdesk.Api.Chat.ChatPipeline.EscalationTokenMetadataKey));
 
     /// <summary>A real, signed access token that the app's JWT validation accepts (needs <c>testJwt: true</c>).</summary>
     public static string Jwt(string tenant = "tenant-a", string user = "user-1", TimeSpan? lifetime = null) =>
@@ -227,8 +205,8 @@ public sealed class ApiFactory(
             s.AddSingleton<ILiveSearchService>(Search);
             s.RemoveAll<IKnowledgeBaseSearch>();
             s.AddSingleton<IKnowledgeBaseSearch>(KnowledgeBase);
-            s.RemoveAll<IIntakeFormGenerator>();
-            s.AddSingleton<IIntakeFormGenerator>(FormGenerator);
+            s.RemoveAll<ITicketInterviewer>();
+            s.AddSingleton<ITicketInterviewer>(Interviewer);
         });
     }
 }
@@ -246,17 +224,6 @@ public class ChatEndpointTests
         return req;
     }
 
-    private static HttpRequestMessage PostEscalation(object body, string tenant = "tenant-a", string user = "user-1")
-    {
-        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/chat/escalate")
-        {
-            Content = JsonContent.Create(body)
-        };
-        req.Headers.Add("X-Dev-Tenant", tenant);
-        req.Headers.Add("X-Dev-User", user);
-        return req;
-    }
-
     private static async Task<HelpdeskApiResponse> Reply(
         HttpClient client, string text, Guid conversationId, string tenant = "tenant-a", string user = "user-1")
     {
@@ -271,19 +238,8 @@ public class ChatEndpointTests
         return (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
     }
 
-    private static string TokenOf(HelpdeskApiResponse reply) => reply.Metadata[ChatPipeline.EscalationTokenMetadataKey];
-
-    private static string Base64UrlDecode(string s) => Encoding.UTF8.GetString(Base64UrlEncoder.DecodeBytes(s));
-    private static string Base64UrlEncode(string s) => Base64UrlEncoder.Encode(Encoding.UTF8.GetBytes(s));
-
-    private sealed class ManualTime(DateTimeOffset now) : TimeProvider
-    {
-        public DateTimeOffset Now { get; set; } = now;
-        public override DateTimeOffset GetUtcNow() => Now;
-    }
-
     [Fact]
-    public async Task PolicyViolation_HasNoForm_AndNeverQueues()
+    public async Task PolicyViolation_NeverQueues_AndDoesNotInterview()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PolicyViolation, "Use an access request.");
@@ -292,37 +248,7 @@ public class ChatEndpointTests
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var body = await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal(ActionLanes.PolicyViolation, body!.ActionLane);
-        Assert.Null(body.IntakeForm);
-        Assert.Null(f.FormGenerator.LastLane);
-        Assert.Empty(f.Publisher.Sent);
-    }
-
-    [Fact]
-    public async Task Escalation_GeneratesScenarioSpecificForm()
-    {
-        using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var res = await f.CreateClient().SendAsync(Post("My corporate laptop battery drains from 100% to 20% in an hour."));
-
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        var body = await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>();
-        Assert.Equal("Laptop battery details", body!.IntakeForm!.Title);
-        Assert.Contains("battery", f.FormGenerator.LastInput, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(ActionLanes.PrivateCorp, f.FormGenerator.LastLane);
-    }
-
-    [Fact]
-    public async Task Escalation_FormGenerationFailure_FallsBackToAGenericForm()
-    {
-        using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        f.FormGenerator.Failure = new InvalidOperationException("model down");
-        var res = await f.CreateClient().SendAsync(Post("VPN is down"));
-
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        var body = await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>();
-        Assert.Equal(ChatPipeline.FallbackForm.Title, body!.IntakeForm!.Title);
-        Assert.False(string.IsNullOrEmpty(TokenOf(body)));
+        Assert.Equal(0, f.Interviewer.Calls);
         Assert.Empty(f.Publisher.Sent);
     }
 
@@ -344,22 +270,216 @@ public class ChatEndpointTests
         using var escalation = Post("My corporate VPN token is broken.");
         escalation.Headers.UserAgent.ParseAdd("ExampleBrowser/1.2");
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(escalation)).StatusCode);
-        Assert.Equal("ExampleBrowser/1.2", f.FormGenerator.LastUserAgent);
+        Assert.Equal("ExampleBrowser/1.2", f.Interviewer.LastUserAgent);
     }
 
     [Fact]
-    public async Task PrivateCorp_WaitsForTheForm_AndQueuesNothingYet()
+    public async Task PrivateCorp_WhenTheModelAsks_RepliesWithTheQuestion_AndQueuesNothing()
     {
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var res = await f.CreateClient().SendAsync(Post("VPN is down", tenant: "tenant-z"));
+        f.Interviewer.Handler = _ => new TicketInterview(false, "Which site do you need access to?", null, null, null, null, null);
+        var res = await f.CreateClient().SendAsync(Post("I need access to a SharePoint site", tenant: "tenant-z"));
 
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var body = (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
-        Assert.Equal(Prompts.EscalationPending, body.ResponseText);
-        Assert.NotNull(body.IntakeForm);
-        Assert.StartsWith("t1.", TokenOf(body));
+        Assert.Equal(ActionLanes.PrivateCorp, body.ActionLane);
+        Assert.Equal("Which site do you need access to?", body.ResponseText);
+        Assert.DoesNotContain(ChatPipeline.TicketRaisedMetadataKey, body.Metadata.Keys);
         Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task PrivateCorp_WhenTheModelRaises_QueuesOneTicket_WithRedactedDetails()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.Interviewer.Handler = _ => new TicketInterview(
+            true, "Thanks, I've sent this to the service desk.", "Visio install failing",
+            "Visio will not install on the user's work laptop. They said my password is hunter2.",
+            "- Asked about Visio. They can be reached on bob@example.com. Password is hunter2.",
+            "Install Visio remotely.", "Restarted the laptop");
+        var client = f.CreateClient();
+        var conversationId = Guid.NewGuid();
+
+        var req = Post("Visio won't install on my work laptop, my password is hunter2", conversationId, "tenant-q");
+        req.Headers.Remove("X-Dev-User");
+        req.Headers.Add("X-Dev-User", "user-9");
+        var res = await client.SendAsync(req);
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var body = (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
+        Assert.Equal("Thanks, I've sent this to the service desk.", body.ResponseText);
+        Assert.Equal("true", body.Metadata[ChatPipeline.TicketRaisedMetadataKey]);
+        var evt = Assert.Single(f.Publisher.Sent);
+        Assert.Equal(evt.EventId.ToString(), body.Metadata[ChatPipeline.TicketEventIdMetadataKey]);
+        Assert.Equal("tenant-q", evt.TenantId);
+        Assert.Equal("user-9", evt.UserId);
+        Assert.Equal(conversationId, evt.ConversationId);
+        Assert.Equal("Visio install failing", evt.Subject);
+        Assert.Equal("Visio install failing", evt.Details!.Title);
+        Assert.Equal(["Summary", "Conversation so far", "Recommended action", "Steps already tried"],
+            evt.Details.Answers.Select(a => a.Label));
+        Assert.Equal("Install Visio remotely.", evt.Details.Answers[2].Value);
+        // The summary and the conversation are separate fields, and only secrets are redacted.
+        Assert.StartsWith("Visio will not install", evt.Summary);
+        Assert.Contains("bob@example.com", evt.ConversationSummary);
+        Assert.DoesNotContain("hunter2", evt.Summary + evt.ConversationSummary);
+        Assert.NotEqual(evt.Summary, evt.ConversationSummary);
+        Assert.DoesNotContain("hunter2", evt.SanitizedPayload);
+        Assert.Equal(ProcessPrivateCorpTicketEvent.CurrentSchemaVersion, evt.SchemaVersion);
+        Assert.Equal(res.Headers.GetValues("X-Correlation-ID").Single(), evt.CorrelationId);
+    }
+
+    [Fact]
+    public async Task PrivateCorp_OmitsEmptyOptionalSections()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.Interviewer.Handler = _ => new TicketInterview(true, "Sent.", "VPN down", "VPN is down.", null, null, null);
+
+        await f.CreateClient().SendAsync(Post("VPN is down"));
+
+        var evt = Assert.Single(f.Publisher.Sent);
+        Assert.Equal(["Summary"], evt.Details!.Answers.Select(a => a.Label));
+        Assert.Null(evt.ConversationSummary);
+    }
+
+    [Fact]
+    public async Task PrivateCorp_RetriedRequest_QueuesTheSameEventId()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        var client = f.CreateClient();
+        var conversationId = Guid.NewGuid();
+
+        await Reply(client, "VPN is down", conversationId);
+        await Reply(client, "VPN is down", conversationId);
+
+        Assert.Equal(2, f.Publisher.Sent.Count);
+        Assert.Equal(f.Publisher.Sent[0].EventId, f.Publisher.Sent[1].EventId);
+    }
+
+    [Fact]
+    public async Task PrivateCorp_InterviewerSeesTheRedactedConversation_NotJustTheLastMessage()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.Interviewer.Handler = _ => new TicketInterview(false, "Anything else?", null, null, null, null, null);
+        var conversationId = Guid.NewGuid();
+        var history = f.SignedHistory("tenant-a", "user-1", conversationId,
+            ("user", "I need access to the Finance SharePoint site"),
+            ("assistant", "What do you need to do there?"));
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/chat/message")
+        {
+            Content = JsonContent.Create(new
+            {
+                messageText = "View the monthly figures. My password is hunter2.",
+                conversationId,
+                conversationHistory = history
+            })
+        };
+        req.Headers.Add("X-Dev-Tenant", "tenant-a");
+        req.Headers.Add("X-Dev-User", "user-1");
+
+        Assert.Equal(HttpStatusCode.OK, (await f.CreateClient().SendAsync(req)).StatusCode);
+
+        var seen = f.Interviewer.LastConversation!;
+        Assert.StartsWith("user: I need access to the Finance SharePoint site\nassistant: What do you need to do there?\nuser: View the monthly figures.", seen);
+        Assert.DoesNotContain("hunter2", seen);
+        Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task PrivateCorp_BelowTheBackstop_LetsTheModelKeepAsking()
+    {
+        using var f = new ApiFactory(settings: new Dictionary<string, string> { ["Chat:MaxInterviewTurns"] = "3" });
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.Interviewer.Handler = _ => new TicketInterview(false, "Which site?", null, null, null, null, null);
+        var conversationId = Guid.NewGuid();
+        var history = f.SignedHistory("tenant-a", "user-1", conversationId,
+            ("user", "I need access"), ("assistant", "To what?"));
+
+        var res = await f.CreateClient().SendAsync(PostWithHistory("The finance site", conversationId, history));
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.False(f.Interviewer.LastMustRaise);
+        Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task PrivateCorp_AtTheBackstop_TellsTheModelToRaise()
+    {
+        using var f = new ApiFactory(settings: new Dictionary<string, string> { ["Chat:MaxInterviewTurns"] = "2" });
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        var conversationId = Guid.NewGuid();
+        var history = f.SignedHistory("tenant-a", "user-1", conversationId,
+            ("user", "I need access"), ("assistant", "To what?"));
+
+        var res = await f.CreateClient().SendAsync(PostWithHistory("The finance site", conversationId, history));
+
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.True(f.Interviewer.LastMustRaise);
+        Assert.Single(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task PrivateCorp_AtTheBackstop_RaisesAMinimalTicket_IfTheModelAsksAnyway()
+    {
+        using var f = new ApiFactory(settings: new Dictionary<string, string> { ["Chat:MaxInterviewTurns"] = "2" });
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.Interviewer.Handler = _ => new TicketInterview(false, "And which folder?", null, null, null, null, null);
+        var conversationId = Guid.NewGuid();
+        var history = f.SignedHistory("tenant-a", "user-1", conversationId,
+            ("user", "I need access to the finance site, my password is hunter2"), ("assistant", "To what?"));
+
+        var res = await f.CreateClient().SendAsync(PostWithHistory("Read access please", conversationId, history));
+
+        var body = (await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
+        Assert.Equal(Prompts.TicketRaisedWithoutInterview, body.ResponseText);
+        Assert.Equal("true", body.Metadata[ChatPipeline.TicketRaisedMetadataKey]);
+        var evt = Assert.Single(f.Publisher.Sent);
+        Assert.StartsWith("I need access to the finance site", evt.Subject);
+        Assert.Contains("details may be missing", evt.Summary);
+        Assert.Contains("Read access please", evt.ConversationSummary);
+        Assert.DoesNotContain("hunter2", evt.SanitizedPayload);
+    }
+
+    private static HttpRequestMessage PostWithHistory(string text, Guid conversationId, IReadOnlyList<ChatHistoryMessage> history)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/chat/message")
+        {
+            Content = JsonContent.Create(new { messageText = text, conversationId, conversationHistory = history })
+        };
+        req.Headers.Add("X-Dev-Tenant", "tenant-a");
+        req.Headers.Add("X-Dev-User", "user-1");
+        return req;
+    }
+
+    [Fact]
+    public async Task PrivateCorp_InterviewFailure_Returns502_AndQueuesNothing()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.Interviewer.Failure = new TicketInterviewException("model down");
+        var res = await f.CreateClient().SendAsync(Post("VPN is down"));
+
+        Assert.Equal(HttpStatusCode.BadGateway, res.StatusCode);
+        using var problem = System.Text.Json.JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+        Assert.Equal("interview_failed", problem.RootElement.GetProperty("code").GetString());
+        Assert.Empty(f.Publisher.Sent);
+    }
+
+    [Fact]
+    public async Task PrivateCorp_QueueFailure_Returns503()
+    {
+        using var f = new ApiFactory();
+        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
+        f.Publisher.Failure = new Azure.RequestFailedException("queue down");
+
+        var res = await f.CreateClient().SendAsync(Post("VPN is down"));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
     }
 
     [Fact]
@@ -379,12 +499,10 @@ public class ChatEndpointTests
         f.Router.Handler = _ => (ActionLanes.PublicTech, "");
         var tech = await (await f.CreateClient().SendAsync(Post("excel xlookup"))).Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal("tech answer", tech!.ResponseText);
-        Assert.Null(tech.IntakeForm);
 
         f.Router.Handler = _ => (ActionLanes.PublicSearch, "");
         var search = await (await f.CreateClient().SendAsync(Post("is azure down"))).Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal("search answer: results", search!.ResponseText);
-        Assert.Null(search.IntakeForm);
         Assert.Empty(f.Publisher.Sent);
     }
 
@@ -453,7 +571,6 @@ public class ChatEndpointTests
         Assert.Equal(HttpStatusCode.OK, replyResponse.StatusCode);
         var technicalReply = (await replyResponse.Content.ReadFromJsonAsync<HelpdeskApiResponse>())!;
         Assert.Equal(ActionLanes.PublicTech, technicalReply.ActionLane);
-        Assert.Null(technicalReply.IntakeForm);
         Assert.Empty(f.Publisher.Sent);
         Assert.Equal(2, f.Inference.LastHistory!.Count);
         Assert.Contains(initialIssue, f.Inference.LastHistory[0].Content);
@@ -508,217 +625,7 @@ public class ChatEndpointTests
         var body = await res.Content.ReadFromJsonAsync<HelpdeskApiResponse>();
         Assert.Equal(ActionLanes.NoMatch, body!.ActionLane);
         Assert.Equal(Prompts.NoMatchFallback, body.ResponseText);
-        Assert.Null(body.IntakeForm);
-        Assert.False(body.ActionCardRequired);
         Assert.Empty(f.Publisher.Sent);
-    }
-
-    [Fact]
-    public async Task Escalate_QueuesOneTicket_WithTheRequestAndRedactedAnswers()
-    {
-        using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var client = f.CreateClient();
-        var conversationId = Guid.NewGuid();
-        var reply = await Reply(client, "Visio won't install on my work laptop", conversationId, "tenant-q", "user-9");
-
-        var res = await client.SendAsync(PostEscalation(new
-        {
-            conversationId,
-            escalationToken = TokenOf(reply),
-            formTitle = "Visio install details",
-            answers = new[]
-            {
-                new { label = "Device model", value = "Surface Laptop 5" },
-                new { label = "Notes", value = "my password is hunter2" },
-                new { label = "Anything else", value = "   " }
-            }
-        }, tenant: "tenant-q", user: "user-9"));
-
-        Assert.Equal(HttpStatusCode.Accepted, res.StatusCode);
-        var body = await res.Content.ReadFromJsonAsync<EscalationResponse>();
-        var evt = Assert.Single(f.Publisher.Sent);
-        Assert.Equal(evt.EventId, body!.TicketEventId);
-        Assert.Equal("queued", body.Status);
-        Assert.Equal("tenant-q", evt.TenantId);
-        Assert.Equal("user-9", evt.UserId);
-        Assert.Equal(conversationId, evt.ConversationId);
-        Assert.Equal("Visio won't install on my work laptop", evt.Subject);
-        Assert.StartsWith("Visio won't install on my work laptop\n\n", evt.SanitizedPayload);
-        Assert.Contains("Device model:\nSurface Laptop 5", evt.SanitizedPayload);
-        Assert.Equal("Visio install details", evt.Details!.Title);
-        Assert.Equal(2, evt.Details.Answers.Count);
-        Assert.Equal("Surface Laptop 5", evt.Details.Answers[0].Value);
-        Assert.DoesNotContain("hunter2", evt.Details.Answers[1].Value);
-        Assert.DoesNotContain("hunter2", evt.SanitizedPayload);
-        Assert.Equal(ProcessPrivateCorpTicketEvent.CurrentSchemaVersion, evt.SchemaVersion);
-        Assert.Equal(res.Headers.GetValues("X-Correlation-ID").Single(), evt.CorrelationId);
-    }
-
-    [Fact]
-    public async Task Escalate_WithNoAnswers_QueuesTheRequestAlone()
-    {
-        using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var client = f.CreateClient();
-        var conversationId = Guid.NewGuid();
-        var reply = await Reply(client, "VPN is down", conversationId);
-
-        var res = await client.SendAsync(PostEscalation(new
-        {
-            conversationId,
-            escalationToken = TokenOf(reply),
-            formTitle = "Request details",
-            answers = new[] { new { label = "Additional details", value = "" } }
-        }));
-
-        Assert.Equal(HttpStatusCode.Accepted, res.StatusCode);
-        var evt = Assert.Single(f.Publisher.Sent);
-        Assert.Equal("VPN is down", evt.SanitizedPayload);
-        Assert.Null(evt.Details);
-    }
-
-    [Fact]
-    public async Task Escalate_Resubmitted_ReusesTheSameTicketId()
-    {
-        using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var client = f.CreateClient();
-        var conversationId = Guid.NewGuid();
-        var token = TokenOf(await Reply(client, "VPN is down", conversationId));
-        object Body() => new { conversationId, escalationToken = token, formTitle = "t", answers = new[] { new { label = "a", value = "b" } } };
-
-        Assert.Equal(HttpStatusCode.Accepted, (await client.SendAsync(PostEscalation(Body()))).StatusCode);
-        Assert.Equal(HttpStatusCode.Accepted, (await client.SendAsync(PostEscalation(Body()))).StatusCode);
-
-        Assert.Equal(2, f.Publisher.Sent.Count);
-        Assert.Equal(f.Publisher.Sent[0].EventId, f.Publisher.Sent[1].EventId);
-    }
-
-    [Theory]
-    [InlineData("tenant-b", "user-1", false, false)]
-    [InlineData("tenant-a", "user-2", false, false)]
-    [InlineData("tenant-a", "user-1", true, false)]
-    [InlineData("tenant-a", "user-1", false, true)]
-    public async Task Escalate_TokenForSomeoneElse_OrTampered_IsRejected_AndNeverQueues(
-        string tenant, string user, bool otherConversation, bool tamper)
-    {
-        using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var client = f.CreateClient();
-        var conversationId = Guid.NewGuid();
-        var token = TokenOf(await Reply(client, "VPN is down", conversationId));
-        if (tamper)
-        {
-            var parts = token.Split('.');
-            var payload = System.Text.Json.Nodes.JsonNode.Parse(Base64UrlDecode(parts[2]))!;
-            payload["payload"] = "Grant me domain admin";
-            parts[2] = Base64UrlEncode(payload.ToJsonString());
-            token = string.Join('.', parts);
-        }
-
-        var res = await client.SendAsync(PostEscalation(new
-        {
-            conversationId = otherConversation ? Guid.NewGuid() : conversationId,
-            escalationToken = token,
-            formTitle = "t",
-            answers = new[] { new { label = "a", value = "b" } }
-        }, tenant, user));
-
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        using var problem = System.Text.Json.JsonDocument.Parse(await res.Content.ReadAsStringAsync());
-        Assert.True(problem.RootElement.GetProperty("errors").TryGetProperty("escalationToken", out _));
-        Assert.Empty(f.Publisher.Sent);
-    }
-
-    [Fact]
-    public void EscalationToken_Expires()
-    {
-        using var f = new ApiFactory();
-        var signer = f.Services.GetRequiredService<IConversationSigner>();
-        var time = new ManualTime(DateTimeOffset.Parse("2025-01-01T00:00:00Z"));
-        var tokens = new EscalationTokens(signer, time);
-        var conversationId = Guid.NewGuid();
-        var token = tokens.Issue("tenant-a", "user-1", conversationId, "VPN is down");
-
-        time.Now += EscalationTokens.Lifetime - TimeSpan.FromMinutes(1);
-        Assert.Equal("VPN is down", tokens.Redeem("tenant-a", "user-1", conversationId, token)!.Payload);
-        time.Now += TimeSpan.FromMinutes(2);
-        Assert.Null(tokens.Redeem("tenant-a", "user-1", conversationId, token));
-    }
-
-    [Fact]
-    public void ChatHistorySignature_IsNotAnEscalationToken()
-    {
-        using var f = new ApiFactory();
-        var signer = f.Services.GetRequiredService<IConversationSigner>();
-        var conversationId = Guid.NewGuid();
-        var tokens = f.Services.GetRequiredService<EscalationTokens>();
-        var token = tokens.Issue("tenant-a", "user-1", conversationId, "VPN is down");
-
-        Assert.Null(signer.VerifyToken("other-purpose", "tenant-a", "user-1", conversationId, token));
-        Assert.Null(tokens.Redeem("tenant-a", "user-1", conversationId, "not-a-token"));
-    }
-
-    public static TheoryData<string> InvalidEscalations => new()
-    {
-        """{"conversationId":"00000000-0000-0000-0000-000000000000","escalationToken":"t1.x.y.z","formTitle":"t","answers":[{"label":"a","value":"b"}]}""",
-        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":" ","formTitle":"t","answers":[{"label":"a","value":"b"}]}""",
-        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":"t1.x.y.z","formTitle":" ","answers":[{"label":"a","value":"b"}]}""",
-        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":"t1.x.y.z","formTitle":"t","answers":[{"label":"","value":"b"}]}""",
-        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":"t1.x.y.z","formTitle":"t","answers":[{"label":"a","value":null}]}""",
-        """{"conversationId":"11111111-1111-1111-1111-111111111111","escalationToken":"t1.x.y.z","formTitle":"t","answers":[{"label":"a","value":"b"}]}""",
-    };
-
-    [Theory]
-    [MemberData(nameof(InvalidEscalations))]
-    public async Task Escalate_InvalidRequest_IsRejected_AndNeverQueues(string json)
-    {
-        using var f = new ApiFactory();
-        var req = PostEscalation(new { });
-        req.Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-
-        var res = await f.CreateClient().SendAsync(req);
-
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.Empty(f.Publisher.Sent);
-    }
-
-    [Fact]
-    public async Task Escalate_OversizedValue_IsRejected()
-    {
-        using var f = new ApiFactory();
-        var res = await f.CreateClient().SendAsync(PostEscalation(new
-        {
-            conversationId = Guid.NewGuid(),
-            escalationToken = "t1.x.y.z",
-            formTitle = "t",
-            answers = new[] { new { label = "a", value = new string('x', EscalationSubmitter.MaxValueLength + 1) } }
-        }));
-
-        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
-        Assert.Empty(f.Publisher.Sent);
-    }
-
-    [Fact]
-    public async Task Escalate_QueueFailure_Returns503()
-    {
-        using var f = new ApiFactory();
-        f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
-        var client = f.CreateClient();
-        var conversationId = Guid.NewGuid();
-        var token = TokenOf(await Reply(client, "VPN is down", conversationId));
-        f.Publisher.Failure = new Azure.RequestFailedException("queue down");
-
-        var res = await client.SendAsync(PostEscalation(new
-        {
-            conversationId,
-            escalationToken = token,
-            formTitle = "t",
-            answers = new[] { new { label = "a", value = "b" } }
-        }));
-
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
     }
 
     [Fact]
@@ -799,25 +706,6 @@ public class ChatEndpointTests
         };
         var res = await f.CreateClient().SendAsync(req);
         Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
-    }
-
-    [Fact]
-    public async Task Escalate_WithoutToken_ReturnsUnauthorized_WhenDevAuthDisabled()
-    {
-        using var f = new ApiFactory(devAuth: false);
-        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/chat/escalate")
-        {
-            Content = JsonContent.Create(new
-            {
-                conversationId = Guid.NewGuid(),
-                escalationToken = "t1.x.y.z",
-                formTitle = "t",
-                answers = new[] { new { label = "a", value = "b" } }
-            })
-        };
-        var res = await f.CreateClient().SendAsync(req);
-        Assert.Equal(HttpStatusCode.Unauthorized, res.StatusCode);
-        Assert.Empty(f.Publisher.Sent);
     }
 
     [Fact]

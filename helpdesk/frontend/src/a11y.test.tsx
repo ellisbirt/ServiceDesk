@@ -33,35 +33,14 @@ describe('accessibility (axe)', () => {
     await expectNoAxeViolations(container);
   });
 
-  it('a response with a generated intake form has no violations', async () => {
+  it('a service-desk reply that raised a ticket has no violations', async () => {
     const { container } = render(
       <ChatMessageResponseBubble
         response={{
           conversationId: 'c1',
           actionLane: 'PRIVATE_CORP',
-          responseText: 'You need **approval** for that.',
-          actionCardRequired: false,
-          metadata: { escalationToken: 't1.k.p.m' },
-          intakeForm: {
-            title: 'Laptop details',
-            submitLabel: 'Send to the service desk',
-            fields: [
-              {
-                id: 'model',
-                label: 'Laptop model',
-                description: 'The model shown on your device.',
-                inputType: 'text',
-                required: true,
-              },
-              {
-                id: 'details',
-                label: 'Additional details',
-                description: 'Anything else that could help.',
-                inputType: 'textarea',
-                required: false,
-              },
-            ],
-          },
+          responseText: 'I have sent your request to the **service desk**.',
+          metadata: { ticketRaised: 'true' },
         }}
       />,
     );
