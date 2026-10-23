@@ -38,8 +38,11 @@ public class SearchOptions
 {
     public const string SectionName = "Search";
 
-    /// <summary>Name of the active provider (see <see cref="SearchProviderCatalog"/>).</summary>
-    public string Provider { get; set; } = "Tavily";
+    /// <summary>
+    /// Name of the active provider (see <see cref="SearchProviderCatalog"/>). Empty means automatic, see
+    /// <see cref="Helpdesk.Infrastructure.ProviderAffinity.SearchProvider"/>; the resolved name is what the app uses.
+    /// </summary>
+    public string Provider { get; set; } = "";
     /// <summary>Shorthand: used as the active provider's key when <c>Search:Providers:{Name}:ApiKey</c> is empty.</summary>
     public string ApiKey { get; set; } = "";
     public int TopResults { get; set; } = 3;

@@ -61,6 +61,16 @@ public static class DependencyInjection
             }
         });
 
+        // Without an explicit embedding role, follow the chat vendor where it offers embeddings (OpenAI).
+        services.AddOptions<LlmOptions>().PostConfigure(llm =>
+        {
+            var role = ProviderAffinity.EmbeddingRoleName(config);
+            if (!llm.Roles.ContainsKey(role) && ProviderAffinity.DerivedEmbeddingRole(config) is { } derived)
+            {
+                llm.Roles[role] = derived;
+            }
+        });
+
         if (chatConfigured)
         {
             services.AddScoped<IChatProvider>(sp => sp.GetRequiredService<ILlmProviderRouter>().GetChat(ChatRole));

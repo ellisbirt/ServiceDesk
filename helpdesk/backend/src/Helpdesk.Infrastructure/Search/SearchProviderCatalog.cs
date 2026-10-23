@@ -29,6 +29,8 @@ public static class SearchProviderCatalog
     /// </summary>
     public const string NativeClaude = "Claude";
 
+    public const string Tavily = "Tavily";
+
     public static bool IsNativeClaude(string name) =>
         string.Equals(name, NativeClaude, StringComparison.OrdinalIgnoreCase);
 
@@ -49,7 +51,10 @@ public static class SearchServiceCollectionExtensions
     public static IServiceCollection AddLiveSearch(this IServiceCollection services, IConfiguration config)
     {
         var search = config.GetSection(SearchOptions.SectionName).Get<SearchOptions>() ?? new();
+        // Search:Provider may be empty, meaning "the same vendor as the chat model where it offers search".
+        search.Provider = ProviderAffinity.SearchProvider(config);
         services.Configure<SearchOptions>(config.GetSection(SearchOptions.SectionName));
+        services.PostConfigure<SearchOptions>(o => o.Provider = search.Provider);
 
         if (SearchProviderCatalog.IsNativeClaude(search.Provider))
         {

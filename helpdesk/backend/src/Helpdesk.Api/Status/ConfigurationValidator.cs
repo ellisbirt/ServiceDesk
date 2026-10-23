@@ -149,6 +149,7 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
     {
         const string area = "Search";
         var search = config.GetSection(SearchOptions.SectionName).Get<SearchOptions>() ?? new();
+        search.Provider = Helpdesk.Infrastructure.ProviderAffinity.SearchProvider(config);
         check(search.TopResults >= 1, area, "TopResults", "Search:TopResults is at least 1.", "Search:TopResults must be at least 1.");
 
         if (SearchProviderCatalog.IsNativeClaude(search.Provider))
@@ -221,9 +222,12 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
         check(kb.TimeoutSeconds >= 1, area, "Timeout", "Kb:TimeoutSeconds is at least 1.", "Kb:TimeoutSeconds must be at least 1.");
 
         var embedding = config[$"{LlmOptions.SectionName}:Roles:{kb.EmbeddingRole}:Provider"];
-        if (string.IsNullOrWhiteSpace(embedding))
+        if (string.IsNullOrWhiteSpace(embedding) && Helpdesk.Infrastructure.ProviderAffinity.DerivedEmbeddingRole(config) is { } derived)
+            pass(area, "Embedding",
+                $"Llm:Roles:{kb.EmbeddingRole} is not set, so questions are embedded with the chat vendor's '{derived.Model}'. AgentDesk must embed articles with the same provider and model.");
+        else if (string.IsNullOrWhiteSpace(embedding))
             warn(area, "Embedding",
-                $"Llm:Roles:{kb.EmbeddingRole} is not configured, so only lexical (keyword) search runs. Configure it with the same provider and model AgentDesk embeds articles with to add semantic search.");
+                $"Llm:Roles:{kb.EmbeddingRole} is not configured and the chat vendor gives no default embedding model, so only lexical (keyword) search runs. Configure it with the same provider and model AgentDesk embeds articles with to add semantic search.");
         else
             pass(area, "Embedding", $"Questions are embedded with the '{LlmProviders.Normalize(embedding)}' provider for semantic search.");
     }

@@ -134,8 +134,18 @@ public class SearchProviderTests
         return scope.ServiceProvider.GetRequiredService<ILiveSearchService>().GetType();
     }
 
+    // A chat vendor with no web search of its own, so the third-party default (Tavily) applies.
+    private static Dictionary<string, string?> OpenAiChat() => new()
+    {
+        ["Llm:Roles:chat:Provider"] = "openai", ["Llm:Roles:chat:Model"] = "gpt-test", ["Llm:Roles:chat:ApiKey"] = "k"
+    };
+
     [Fact]
-    public void NoCredentials_UsesStub() => Assert.Equal(typeof(StubLiveSearchService), Resolve([]));
+    public void NoCredentials_UsesStub() => Assert.Equal(typeof(StubLiveSearchService), Resolve(OpenAiChat()));
+
+    [Fact]
+    public void AnthropicChat_WithNoSearchSettings_UsesItsOwnWebSearch() =>
+        Assert.Equal(typeof(NativeClaudeSearchService), Resolve([]));
 
     [Fact]
     public void LegacyApiKey_AppliesToDefaultProvider() =>
