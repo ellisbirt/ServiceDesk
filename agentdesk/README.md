@@ -91,7 +91,7 @@ With the intake running against the same Azurite (`npm run debug` in `../helpdes
 | `Cosmos:AllowInsecureEmulatorCertificate` | Accept the emulator's self-signed certificate. Never set it against a real account. |
 | `Blobs:Provider` | `InMemory` (default) or `Azure`. |
 | `Blobs:ConnectionString` or `Blobs:ServiceUri` (managed identity), `Blobs:Container` | Attachment storage. The default container is `ticket-attachments`. Blob paths are `{tenantId}/{ticketId}/{attachmentId}`. With managed identity, uploads and downloads use user-delegation SAS URLs. |
-| `Attachments:MaxBytes`, `Attachments:MaxPerTicket`, `Attachments:SasLifetimeMinutes` | 25 MB, 50 per ticket, and 10-minute upload/download URLs by default. |
+| `Attachments:MaxBytes`, `Attachments:MaxPerTicket`, `Attachments:SasLifetimeMinutes` | 25 MB, 50 per ticket, and 10-minute upload/download URLs by default. `MaxPerTicket` also caps the chat attachments imported from the intake. `Blobs:Container` must match the helpdesk (see "Attachments from the helpdesk chat"). |
 | `Intake:Provider` | `None` (default), `StorageQueue` or `ServiceBus`. Match the intake's `Queue:Provider`. |
 | `Intake:QueueName`, `Intake:ConnectionString`, `Intake:QueueServiceUri`, `Intake:FullyQualifiedNamespace` | Queue settings. The default queue is `private-corp-tickets`. The URI and namespace forms use managed identity. |
 | `Intake:MaxDeliveries`, `Intake:PollIntervalSeconds`, `Intake:BatchSize`, `Intake:VisibilityTimeoutSeconds` | Poison handling and polling. A Storage Queue message that fails `MaxDeliveries` times (default 5) moves to `<queue>-poison`. Service Bus dead-letters it. |
@@ -198,6 +198,24 @@ Errors are RFC 9457 Problem Details. Every response carries `X-Correlation-Id`.
 | Meta | `GET /meta/vocabulary` (statuses, priorities, categories), `GET /meta/config` (public auth settings for the SPA), `GET /me` |
 | Realtime | `POST /hub/ticket` (a single-use connection ticket), then the SignalR hub `/hubs/tickets`. Events: `ticketCreated`, `ticketUpdated`, `timelineEntryAdded`, `kbChanged`. |
 | Ops | `/healthz`, `/readyz`, `/status` (admin only: configuration checks for storage, blobs, intake and LLM roles) |
+
+## Attachments from the helpdesk chat
+
+Files a requester attaches in the helpdesk chat (pasted logs, documents, images) travel with the ticket event as `attachments`. Each entry has `id`, `fileName`, `contentType`, `size`, `sha256`, `blobPath` and `scanStatus`.
+
+**The two services share one blob container.** The helpdesk writes the files to `intake/{tenantId}/{conversationId}/{attachmentId}/{fileName}` in the container it is configured with, and AgentDesk records each one against the new ticket without copying it. This needs:
+
+- `Blobs:Container` here to be the same container as the helpdesk's `Attachments:Container` (both default to `ticket-attachments`), on the **same storage account** (the same `ConnectionString` or `ServiceUri`).
+- Read access for AgentDesk to the `intake/` folder. Downloads use the usual short-lived SAS URL for the stored `blobPath`.
+- Locally, the in-memory blob store cannot see helpdesk files, because it lives inside one process. Run Azurite and set `Blobs__Provider=Azure` with `Blobs__ConnectionString=UseDevelopmentStorage=true` here, and the matching `Attachments__Provider=Azure` on the helpdesk. Without that, imported attachments are listed as missing and not shown.
+
+**How an import behaves**
+- One attachment document per file, with an id derived from the event, so a redelivered event adds nothing. The ticket's `attachmentCount` and timeline are updated like any other attachment.
+- A `blobPath` is accepted only if it starts with `intake/{tenantId}/` for the ticket's own tenant and has no `..`, empty segments, backslashes, a leading `/` or control characters (and is under 1,024 characters). Anything else is skipped with a warning, and the ticket is still created.
+- At most `Attachments:MaxPerTicket` are imported. A file that is not in blob storage is stored as `rejected` (`missing_blob`) and is not listed. A storage error while checking does not drop the file.
+- Imported files bypass the agent-upload type allowlist, because the helpdesk validated them. Agent uploads still use it (`.md` and `text/markdown` are now allowed).
+
+**Chat attachments are not scanned.** The helpdesk has no malware scanner yet, so these files arrive with `scanStatus: not_scanned`, and AgentDesk stores that value as the attachment's `scanResult`. It is never shown as clean. Treat them as untrusted when opening them, until a scanner is added on the helpdesk side (the same `IAttachmentScanner` seam exists here for agent uploads).
 
 ## Knowledge base and the "reply with KB" flow
 

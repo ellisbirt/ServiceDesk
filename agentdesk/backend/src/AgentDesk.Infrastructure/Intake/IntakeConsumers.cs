@@ -36,7 +36,7 @@ public sealed class IntakeOptions
 public enum IntakeOutcome { Created, Duplicate, Invalid }
 
 /// <summary>Maps an intake queue event to a ticket. Shared by both queue transports so behaviour is identical.</summary>
-public sealed class IntakeEventProcessor(TicketService tickets, ILogger<IntakeEventProcessor> logger)
+public sealed class IntakeEventProcessor(TicketService tickets, AttachmentService attachments, ILogger<IntakeEventProcessor> logger)
 {
     public static readonly ActivitySource ActivitySource = new("AgentDesk.Intake");
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -81,9 +81,17 @@ public sealed class IntakeEventProcessor(TicketService tickets, ILogger<IntakeEv
             Category: null,
             evt.ConversationId.ToString("D"),
             evt.CorrelationId,
-            evt.ConversationSummary);
+            evt.ConversationSummary,
+            evt.Attachments?.Select(a => new IntakeAttachment(
+                a.Id.ToString("D"), a.FileName, a.ContentType, a.Size, a.Sha256, a.BlobPath, a.ScanStatus)).ToList());
 
         var (ticket, created) = await tickets.ImportFromIntakeAsync(intake, ct);
+        // Also on a redelivery: it adds only what a crash left out, and nothing otherwise.
+        if (intake.Attachments is { Count: > 0 })
+        {
+            var added = await attachments.ImportFromIntakeAsync(ticket, intake.RequesterId, intake.Attachments, ct);
+            if (added > 0) logger.LogInformation("Recorded {Count} chat attachment(s) on ticket {Number}", added, ticket.Number);
+        }
         logger.LogInformation(created ? "Created ticket {Number} from intake" : "Intake event already imported as {Number}", ticket.Number);
         return created ? IntakeOutcome.Created : IntakeOutcome.Duplicate;
     }

@@ -31,7 +31,8 @@ public sealed record IntakeTicket(
     string? Category,
     string? ConversationId,
     string? CorrelationId,
-    string? ConversationSummary = null);
+    string? ConversationSummary = null,
+    IReadOnlyList<IntakeAttachment>? Attachments = null);
 
 public sealed class TicketService(
     ITicketRepository repository,
