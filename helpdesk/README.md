@@ -167,7 +167,15 @@ Production example:
 
 #### Locally
 
-`appsettings.Development.json` already enables it against the Cosmos emulator on `https://localhost:8081`, using the emulator's published well-known key (not a secret) and AgentDesk's default offline embedding role (`offline-embedding`, 1536 dimensions). `Kb:MinSimilarity` is lowered to 0.1 because the offline embedding is a hashed bag of words, so its similarities are small.
+The knowledge base is off by default, so a fresh clone runs without a Cosmos emulator. To turn it on against the emulator on `https://localhost:8081`, store the switch and the connection string as user secrets (the emulator's published well-known key is not a secret, but it stays out of the repo so secret scanners have nothing to flag):
+
+```powershell
+cd backend\src\Helpdesk.Api
+dotnet user-secrets set "Kb:Provider" "Cosmos"
+dotnet user-secrets set "Kb:Cosmos:ConnectionString" "<emulator connection string>"
+```
+
+`appsettings.Development.json` supplies the rest: the emulator certificate setting and AgentDesk's default offline embedding role (`offline-embedding`, 1536 dimensions). `Kb:MinSimilarity` is lowered to 0.1 because the offline embedding is a hashed bag of words, so its similarities are small.
 
 To see articles in the intake chat:
 
