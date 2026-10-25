@@ -1,9 +1,11 @@
-import type { ChatHistoryMessage } from './api';
+import type { AttachmentRef, ChatHistoryMessage } from './api';
 
 export interface ChatSendRequest {
   messageText: string;
   conversationId: string;
   conversationHistory: ChatHistoryMessage[];
+  /** Files attached to this message. Left out when there are none. */
+  attachments?: AttachmentRef[];
 }
 
 /**
@@ -13,6 +15,8 @@ export interface ChatSendRequest {
 export interface ChatRequestPart {
   conversationId?: string;
   messageText?: string;
+  /** First part only. */
+  attachments?: AttachmentRef[];
   history?: ChatHistoryMessage;
 }
 
@@ -37,7 +41,11 @@ export function needsSplitting(request: ChatSendRequest): boolean {
 /** The request as parts, in the order the server expects: the header, then the history oldest first. */
 export function toParts(request: ChatSendRequest): ChatRequestPart[] {
   return [
-    { conversationId: request.conversationId, messageText: request.messageText },
+    {
+      conversationId: request.conversationId,
+      messageText: request.messageText,
+      ...(request.attachments?.length ? { attachments: request.attachments } : {}),
+    },
     ...request.conversationHistory.map((history): ChatRequestPart => ({ history })),
   ];
 }

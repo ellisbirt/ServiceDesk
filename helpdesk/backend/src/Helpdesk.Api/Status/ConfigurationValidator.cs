@@ -51,6 +51,7 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
         ValidateLlm(Pass, Fail, Check);
         ValidateSearch(Pass, Warn, Fail, Check);
         ValidateKb(dev, Pass, Warn, Fail, Check);
+        ValidateAttachments(dev, Pass, Warn, Fail, Check);
         ValidateQueue(dev, Pass, Warn, Fail, Check);
         ValidateDlp(Pass, Fail);
         ValidateChat(Check);
@@ -127,7 +128,14 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
     {
         const string area = "Llm";
         var role = ExplicitChatRole();
-        if (role is null) return;
+        if (role is null)
+        {
+            // No explicit role: the Anthropic section is the chat role, so report its tiers.
+            var anthropic = config.GetSection(AnthropicOptions.SectionName).Get<AnthropicOptions>() ?? new();
+            if (string.IsNullOrWhiteSpace(anthropic.ApiKey)) anthropic.ApiKey = config["ANTHROPIC_API_KEY"] ?? "";
+            if (anthropic.IsConfigured) ReportTiers(Helpdesk.Infrastructure.DependencyInjection.FromAnthropic(anthropic), pass);
+            return;
+        }
 
         var provider = LlmProviders.Normalize(role.Provider);
         if (!LlmProviders.All.Contains(provider))
@@ -138,6 +146,18 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
         pass(area, "ChatProvider", $"The intake chat uses the '{provider}' provider.");
         check(!string.IsNullOrWhiteSpace(role.Model), area, "ChatModel",
             $"Chat model is '{role.Model}'.", "Llm:Roles:chat:Model is empty.");
+        ReportTiers(role, pass);
+    }
+
+    /// <summary>Says which model serves each tier, and that a vendor with fewer models serves several tiers with one.</summary>
+    private static void ReportTiers(LlmProviderOptions chat, Report pass)
+    {
+        var fast = chat.TierModel(ModelTier.Fast);
+        var deep = chat.TierModel(ModelTier.Deep);
+        var shared = fast == chat.Model && deep == chat.Model
+            ? " The vendor has no separate tier models here, so one model serves every tier; set FastTier:Model and DeepTier:Model to use cheaper and stronger ones."
+            : "";
+        pass("Llm", "Tiers", $"Model tiers: fast '{fast}', standard '{chat.Model}', deep '{deep}'.{shared}");
     }
 
     private LlmProviderOptions? ExplicitChatRole() =>
@@ -230,6 +250,58 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
                 $"Llm:Roles:{kb.EmbeddingRole} is not configured and the chat vendor gives no default embedding model, so only lexical (keyword) search runs. Configure it with the same provider and model AgentDesk embeds articles with to add semantic search.");
         else
             pass(area, "Embedding", $"Questions are embedded with the '{LlmProviders.Normalize(embedding)}' provider for semantic search.");
+    }
+
+    private void ValidateAttachments(bool dev, Report pass, Report warn, Report fail, Verify check)
+    {
+        const string area = "Attachments";
+        var o = config.GetSection(Helpdesk.Infrastructure.Attachments.AttachmentOptions.SectionName)
+            .Get<Helpdesk.Infrastructure.Attachments.AttachmentOptions>() ?? new();
+        var provider = o.EffectiveProvider(dev);
+        if (provider is null)
+        {
+            pass(area, "Provider", "File attachments are off: Attachments:Provider is empty (it defaults to InMemory only in Development).");
+            return;
+        }
+
+        if (string.Equals(provider, Helpdesk.Infrastructure.Attachments.AttachmentProviders.Azure, StringComparison.OrdinalIgnoreCase))
+        {
+            check(!string.IsNullOrWhiteSpace(o.ConnectionString) || !string.IsNullOrWhiteSpace(o.ServiceUri), area, "Storage",
+                $"Files are stored in the '{o.Container}' container, which must be the container AgentDesk reads (its Blobs:Container).",
+                "Attachments:ConnectionString or Attachments:ServiceUri is required when Attachments:Provider is Azure.");
+            check(!string.IsNullOrWhiteSpace(o.Container), area, "Container", "A container is named.", "Attachments:Container must not be empty.");
+        }
+        else if (string.Equals(provider, Helpdesk.Infrastructure.Attachments.AttachmentProviders.InMemory, StringComparison.OrdinalIgnoreCase))
+        {
+            if (dev) pass(area, "Provider", "Files are kept in memory (Development only); AgentDesk cannot see them.");
+            else warn(area, "Provider", "Attachments:Provider is InMemory: files are lost on restart and AgentDesk cannot see them. Use Azure.");
+        }
+        else
+        {
+            fail(area, "Provider", $"Unknown Attachments:Provider '{provider}'. Use InMemory or Azure.");
+            return;
+        }
+
+        check(o.MaxFileBytes > 0 && o.MaxImageBytes > 0 && o.MaxFilesPerMessage >= 1 && o.MaxFilesPerConversation >= o.MaxFilesPerMessage
+              && o.MaxTotalBytesPerConversation >= o.MaxFileBytes, area, "Limits",
+            "The attachment limits are consistent.",
+            "Attachments limits: MaxFileBytes and MaxImageBytes must be positive, MaxFilesPerMessage at least 1, MaxFilesPerConversation at least MaxFilesPerMessage, and MaxTotalBytesPerConversation at least MaxFileBytes.");
+        check(o.MaxExtractedTokensPerFile >= 100 && o.MaxEarlierTokensPerFile >= 100 && o.MaxTokensPerRequest >= o.MaxExtractedTokensPerFile,
+            area, "ModelBudget", "File text shown to the model is bounded.",
+            "Attachments: MaxExtractedTokensPerFile and MaxEarlierTokensPerFile must be at least 100, and MaxTokensPerRequest at least MaxExtractedTokensPerFile.");
+        check(o.RetentionHours >= 1 && o.CleanupIntervalMinutes >= 1 && o.MaxPdfPages >= 1 && o.MaxOfficeEntries >= 1
+              && o.MaxOfficeUncompressedBytes > 0 && o.MaxExtractedChars > 0 && o.PasteMinChars >= 1 && o.PasteMinLines >= 1,
+            area, "Housekeeping", "Retention and parsing limits are valid.",
+            "Attachments: RetentionHours, CleanupIntervalMinutes, MaxPdfPages, MaxOfficeEntries, MaxOfficeUncompressedBytes, MaxExtractedChars, PasteMinChars and PasteMinLines must all be positive.");
+
+        var unknown = o.AllowedExtensions.Where(e => !Helpdesk.Infrastructure.Attachments.AttachmentTypes.IsSupported(e.Trim())).ToList();
+        if (unknown.Count > 0)
+            warn(area, "Extensions", $"Ignoring unsupported Attachments:AllowedExtensions: {string.Join(", ", unknown)}. Supported: {string.Join(", ", Helpdesk.Infrastructure.Attachments.AttachmentTypes.SupportedExtensions)}.");
+        check(o.EffectiveExtensions().Count > 0, area, "AllowedExtensions",
+            "At least one file type is allowed.", "Attachments:AllowedExtensions allows no supported file type.");
+
+        pass(area, "Scanner",
+            "Uploads are NOT scanned for malware: no IAttachmentScanner is plugged in. Files reach tickets marked not_scanned (see README, Attachments).");
     }
 
     private void ValidateQueue(bool dev, Report pass, Report warn, Report fail, Verify check)

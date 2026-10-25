@@ -108,6 +108,13 @@ builder.Services.AddRateLimiter(o =>
         Window = TimeSpan.FromMinutes(1)
     }));
 
+    o.AddPolicy(AttachmentEndpointRouteBuilderExtensions.RateLimitPolicy, ctx => RateLimitPartition.GetFixedWindowLimiter(
+        UserKey(ctx), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = config.GetValue("RateLimit:AttachmentsPerMinute", 30),
+            Window = TimeSpan.FromMinutes(1)
+        }));
+
     // Minting is cheap but unauthenticated-adjacent work; reconnect storms after a deploy need headroom.
     o.AddPolicy(TicketEndpointRouteBuilderExtensions.RateLimitPolicy, ctx => RateLimitPartition.GetFixedWindowLimiter(
         UserKey(ctx), _ => new FixedWindowRateLimiterOptions
@@ -119,7 +126,8 @@ builder.Services.AddRateLimiter(o =>
 
 var allowedOrigins = config.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
-    p.WithOrigins(allowedOrigins).AllowAnyHeader().WithMethods("POST", "GET", "OPTIONS")));
+    p.WithOrigins(allowedOrigins).AllowAnyHeader().WithMethods("POST", "GET", "DELETE", "OPTIONS")
+        .WithExposedHeaders("Retry-After")));
 
 builder.AddHttpHardening();
 var app = builder.Build();
@@ -174,6 +182,7 @@ app.MapGet("/status", (ConfigurationValidator validator) =>
     return Results.Json(report, statusCode: report.Status == "invalid" ? StatusCodes.Status503ServiceUnavailable : StatusCodes.Status200OK);
 }).RequireAuthorization(StatusPolicy);
 app.MapChatEndpoints();
+app.MapAttachmentEndpoints();
 // Tickets only exist when the hub is authenticated with them; Development dev auth does not use them.
 if (!useDevAuth) app.MapTicketEndpoint();
 // The fallback policy (authenticated + tenant claim) applies to the negotiate request. Close connections when

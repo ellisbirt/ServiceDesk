@@ -63,6 +63,7 @@ public sealed class ChatHub(ChatJobQueue queue, ChatRequestLimiter limiter, ILog
 
         Guid? conversationId = null;
         string? messageText = null;
+        IReadOnlyList<AttachmentRef>? attachments = null;
         var history = new List<ChatHistoryMessage>();
         var first = true;
 
@@ -75,7 +76,7 @@ public sealed class ChatHub(ChatJobQueue queue, ChatRequestLimiter limiter, ILog
                 {
                     return ChatAck.Rejected("invalid_request", "The first part must carry conversationId and messageText only.");
                 }
-                (conversationId, messageText, first) = (part.ConversationId, part.MessageText, false);
+                (conversationId, messageText, attachments, first) = (part.ConversationId, part.MessageText, part.Attachments, false);
                 continue;
             }
 
@@ -97,6 +98,7 @@ public sealed class ChatHub(ChatJobQueue queue, ChatRequestLimiter limiter, ILog
         {
             ConversationId = conversationId!.Value,
             MessageText = messageText!,
+            Attachments = attachments ?? [],
             ConversationHistory = history
         });
     }

@@ -63,8 +63,45 @@ public record ProcessPrivateCorpTicketEvent
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TicketDetails? Details { get; init; }
 
+    /// <summary>
+    /// Files the user attached in the chat. They already sit in the blob container shared with the ticket worker, at
+    /// <see cref="TicketAttachment.BlobPath"/>, so the consumer records them against the ticket rather than copying them.
+    /// Optional; absent when there are none.
+    /// </summary>
+    [JsonPropertyName("attachments")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<TicketAttachment>? Attachments { get; init; }
+
     [JsonPropertyName("timestampUtc")]
     public DateTime TimestampUtc { get; init; } = DateTime.UtcNow;
+}
+
+/// <summary>A file attached in the chat, stored in the shared attachments container.</summary>
+public sealed record TicketAttachment
+{
+    [JsonPropertyName("id")]
+    public required Guid Id { get; init; }
+
+    [JsonPropertyName("fileName")]
+    public required string FileName { get; init; }
+
+    [JsonPropertyName("contentType")]
+    public required string ContentType { get; init; }
+
+    [JsonPropertyName("size")]
+    public required long Size { get; init; }
+
+    /// <summary>Lower-case hex SHA-256 of the content.</summary>
+    [JsonPropertyName("sha256")]
+    public string? Sha256 { get; init; }
+
+    /// <summary>Path of the blob inside the shared container (the container name is configured on both sides).</summary>
+    [JsonPropertyName("blobPath")]
+    public required string BlobPath { get; init; }
+
+    /// <summary><c>not_scanned</c> until a scanner is plugged in; consumers must not treat it as clean.</summary>
+    [JsonPropertyName("scanStatus")]
+    public string ScanStatus { get; init; } = "not_scanned";
 }
 
 /// <summary>Answers the requester gave in the follow-up form before the ticket was raised.</summary>

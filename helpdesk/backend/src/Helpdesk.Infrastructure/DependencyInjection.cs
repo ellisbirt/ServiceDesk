@@ -3,6 +3,7 @@ using Azure.Messaging.ServiceBus;
 using Azure.Storage.Queues;
 using Helpdesk.Core.Interfaces;
 using Helpdesk.Infrastructure.Ai;
+using Helpdesk.Infrastructure.Attachments;
 using Helpdesk.Infrastructure.Kb;
 using Helpdesk.Infrastructure.Messaging;
 using Helpdesk.Infrastructure.Search;
@@ -73,7 +74,8 @@ public static class DependencyInjection
 
         if (chatConfigured)
         {
-            services.AddScoped<IChatProvider>(sp => sp.GetRequiredService<ILlmProviderRouter>().GetChat(ChatRole));
+            // Each request names the tier it needs; this sends it to that tier's model within the one vendor.
+            services.AddScoped<IChatProvider>(sp => new TierRoutingChatProvider(sp.GetRequiredService<ILlmProviderRouter>(), ChatRole));
             services.AddScoped<IGuardrailRouterService, AnthropicGuardrailRouterService>();
             services.AddScoped<IPublicInferenceService, AnthropicPublicInferenceService>();
             services.AddScoped<ITicketInterviewer, AnthropicTicketInterviewer>();
@@ -87,6 +89,7 @@ public static class DependencyInjection
 
         services.AddLiveSearch(config);
         services.AddKnowledgeBase(config);
+        services.AddAttachments(config, env);
 
         switch (queueProvider)
         {
@@ -117,6 +120,8 @@ public static class DependencyInjection
     {
         Provider = LlmProviders.Anthropic,
         Model = o.Model,
+        FastTier = string.IsNullOrWhiteSpace(o.FastModel) ? null : new LlmTierOptions { Model = o.FastModel },
+        DeepTier = string.IsNullOrWhiteSpace(o.DeepModel) ? null : new LlmTierOptions { Model = o.DeepModel },
         Endpoint = o.BaseUrl,
         ApiKey = o.ApiKey,
         AnthropicVersion = o.AnthropicVersion,

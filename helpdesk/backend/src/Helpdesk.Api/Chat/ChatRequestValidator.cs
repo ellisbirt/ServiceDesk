@@ -8,6 +8,9 @@ public static class ChatRequestValidator
     public const int MaxMessageLength = 4000;
     public const int MaxHistoryMessages = 20;
 
+    /// <summary>A hard cap on references per message, whatever <c>Attachments:MaxFilesPerMessage</c> allows, so a request cannot be padded.</summary>
+    public const int MaxAttachmentReferences = 50;
+
     /// <summary>A signature is about 110 characters; anything much longer is not one.</summary>
     public const int MaxSignatureLength = 256;
 
@@ -48,6 +51,16 @@ public static class ChatRequestValidator
                 ["conversationHistory"] = [$"History must contain at most {MaxHistoryMessages} user/assistant messages, each between 1 and {MaxMessageLength} characters."]
             };
         }
+        if (BadReferences(request.Attachments) || request.ConversationHistory.Any(m => BadReferences(m.Attachments)))
+        {
+            return new() { ["attachments"] = ["Attachment references are malformed."] };
+        }
         return null;
     }
+
+    private static bool BadReferences(IReadOnlyList<AttachmentRef>? references) =>
+        references is not null
+        && (references.Count > MaxAttachmentReferences
+            || references.Any(r => r is null || r.Id == Guid.Empty || string.IsNullOrWhiteSpace(r.Token) || r.Token.Length > 1024
+                || r.Name is null || r.Name.Length > 255));
 }

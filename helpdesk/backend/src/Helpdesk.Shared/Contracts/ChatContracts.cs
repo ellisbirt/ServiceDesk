@@ -17,6 +17,48 @@ public static class ActionLanes
     };
 }
 
+/// <summary>What kind of file an attachment is, which decides how it is shown to the model.</summary>
+public static class AttachmentKinds
+{
+    /// <summary>Plain text: txt, log, csv, json, md.</summary>
+    public const string Text = "text";
+    public const string Image = "image";
+    public const string Pdf = "pdf";
+    /// <summary>Modern Office documents: docx, xlsx, pptx.</summary>
+    public const string Office = "office";
+}
+
+/// <summary>
+/// A file the user uploaded to a conversation, as returned by <c>POST /api/v1/chat/attachments</c>. The client sends it
+/// back unchanged on the message that uses it and on that message in the stored history. The server never trusts the
+/// descriptive fields: it checks <see cref="Token"/> and reads the file's real details from storage.
+/// </summary>
+public record AttachmentRef
+{
+    [JsonPropertyName("id")]
+    public required Guid Id { get; init; }
+
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    [JsonPropertyName("contentType")]
+    public required string ContentType { get; init; }
+
+    [JsonPropertyName("size")]
+    public required long Size { get; init; }
+
+    [JsonPropertyName("sha256")]
+    public string? Sha256 { get; init; }
+
+    /// <summary>One of <see cref="AttachmentKinds"/>.</summary>
+    [JsonPropertyName("kind")]
+    public required string Kind { get; init; }
+
+    /// <summary>Proof that the server stored this file for this user and conversation. Opaque; send it back as received.</summary>
+    [JsonPropertyName("token")]
+    public required string Token { get; init; }
+}
+
 public record ChatMessageRequest
 {
     [JsonPropertyName("messageText")]
@@ -27,6 +69,10 @@ public record ChatMessageRequest
 
     [JsonPropertyName("conversationHistory")]
     public IReadOnlyList<ChatHistoryMessage> ConversationHistory { get; init; } = [];
+
+    /// <summary>Files uploaded to this conversation for this message.</summary>
+    [JsonPropertyName("attachments")]
+    public IReadOnlyList<AttachmentRef> Attachments { get; init; } = [];
 }
 
 public record ChatHistoryMessage
@@ -44,6 +90,17 @@ public record ChatHistoryMessage
     /// </summary>
     [JsonPropertyName("sig")]
     public string? Signature { get; init; }
+
+    /// <summary>Files that were attached to this message; keep them on the stored history message and send them back.</summary>
+    [JsonPropertyName("attachments")]
+    public IReadOnlyList<AttachmentRef> Attachments { get; init; } = [];
+
+    // Records compare lists by reference; two messages with the same files are the same message.
+    public virtual bool Equals(ChatHistoryMessage? other) =>
+        other is not null && Role == other.Role && Content == other.Content && Signature == other.Signature
+        && (Attachments ?? []).SequenceEqual(other.Attachments ?? []);
+
+    public override int GetHashCode() => HashCode.Combine(Role, Content, Signature, (Attachments ?? []).Count);
 }
 
 /// <summary>
@@ -59,6 +116,10 @@ public record ChatRequestPart
 
     [JsonPropertyName("messageText")]
     public string? MessageText { get; init; }
+
+    /// <summary>Carried by the first part only, with <see cref="ConversationId"/> and <see cref="MessageText"/>.</summary>
+    [JsonPropertyName("attachments")]
+    public IReadOnlyList<AttachmentRef>? Attachments { get; init; }
 
     [JsonPropertyName("history")]
     public ChatHistoryMessage? History { get; init; }

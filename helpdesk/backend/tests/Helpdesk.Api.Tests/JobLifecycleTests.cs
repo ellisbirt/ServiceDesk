@@ -291,6 +291,7 @@ internal sealed class ProcessorRig : IAsyncDisposable
         services.AddSingleton<IGuardrailRouterService>(new FakeRouter());
         services.AddSingleton<IPublicInferenceService>(Inference);
         services.AddSingleton<ITicketInterviewer>(new FakeTicketInterviewer());
+        services.AddSingleton<IAttachmentService>(new NullAttachmentService());
         services.AddSingleton<ILiveSearchService>(new FakeSearch());
         services.AddSingleton<IKnowledgeBaseSearch>(new FakeKnowledgeBase());
         services.AddSingleton(Options.Create(new Helpdesk.Infrastructure.Kb.KbOptions()));

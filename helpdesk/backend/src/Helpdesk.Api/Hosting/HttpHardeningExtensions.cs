@@ -84,11 +84,18 @@ public static class HttpHardeningExtensions
             }
         }
 
-        var limit = options.MaxRequestBodyBytes;
+        var defaultLimit = options.MaxRequestBodyBytes;
+        // An upload carries a whole file, so its limit is the file limit plus room for the form around it.
+        var uploadLimit = (app.Configuration.GetSection("Attachments").Get<Helpdesk.Infrastructure.Attachments.AttachmentOptions>() ?? new()).MaxFileBytes
+            + 1024 * 1024;
         app.Use((ctx, next) =>
         {
             if (ctx.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
             {
+                var limit = HttpMethods.IsPost(ctx.Request.Method)
+                    && ctx.Request.Path.StartsWithSegments("/api/v1/chat/attachments", StringComparison.OrdinalIgnoreCase)
+                    ? Math.Max(defaultLimit, uploadLimit)
+                    : defaultLimit;
                 if (ctx.Request.ContentLength > limit)
                 {
                     throw new BadHttpRequestException(

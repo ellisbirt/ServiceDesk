@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_HISTORY_MESSAGES, MAX_MESSAGE_LENGTH, type ChatHistoryMessage } from './api';
+import { MAX_HISTORY_MESSAGES, MAX_MESSAGE_LENGTH, type AttachmentRef, type ChatHistoryMessage } from './api';
 import { SINGLE_MESSAGE_LIMIT_BYTES, encodedSize, needsSplitting, toParts, type ChatSendRequest } from './chatRequest';
 
 const request = (text: string, history: ChatHistoryMessage[] = []): ChatSendRequest => ({
@@ -48,5 +48,44 @@ describe('chatRequest', () => {
     expect(parts).toHaveLength(MAX_HISTORY_MESSAGES + 1);
     // 4000 two-byte characters plus the envelope is about 8 KB, far below the 32 KB server limit.
     expect(Math.max(...parts.map(encodedSize))).toBeLessThan(SINGLE_MESSAGE_LIMIT_BYTES);
+  });
+
+  describe('attachments', () => {
+    const ref = (name: string): AttachmentRef => ({
+      id: `id-${name}`,
+      name,
+      contentType: 'text/plain',
+      size: 10,
+      kind: 'text',
+      token: `token-${name}`,
+    });
+
+    it('carries the files on the header part only, so each history part stays small', () => {
+      const history: ChatHistoryMessage[] = [
+        { role: 'user', content: 'first', sig: 's1', attachments: [ref('old.log')] },
+        { role: 'assistant', content: 'second', sig: 's2' },
+      ];
+      const parts = toParts({ ...request('latest', history), attachments: [ref('new.log'), ref('shot.png')] });
+
+      expect(parts[0]).toEqual({
+        conversationId: 'c1',
+        messageText: 'latest',
+        attachments: [ref('new.log'), ref('shot.png')],
+      });
+      expect(parts[1]).toEqual({ history: history[0] }); // the earlier message keeps its own files
+      expect(parts[1].history?.attachments).toEqual([ref('old.log')]);
+      expect(parts[2]).toEqual({ history: history[1] });
+      expect(parts.slice(1).every((part) => part.attachments === undefined)).toBe(true);
+    });
+
+    it('leaves the key out when there are no files', () => {
+      expect(toParts({ ...request('latest'), attachments: [] })[0]).toEqual({ conversationId: 'c1', messageText: 'latest' });
+      expect(toParts(request('latest'))[0]).toEqual({ conversationId: 'c1', messageText: 'latest' });
+    });
+
+    it('counts the files towards the size of the request', () => {
+      const withFiles = { ...request('hi'), attachments: Array.from({ length: 5 }, (_, i) => ref(`f${i}.log`)) };
+      expect(encodedSize(withFiles)).toBeGreaterThan(encodedSize(request('hi')));
+    });
   });
 });
