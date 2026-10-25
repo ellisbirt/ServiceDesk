@@ -4,7 +4,7 @@ using Helpdesk.Llm;
 using Helpdesk.Shared.Contracts;
 using Helpdesk.Shared.Events;
 
-namespace Helpdesk.UiTests.Infrastructure;
+namespace ServiceDesk.UiTests.HelpdeskUi;
 
 /// <summary>
 /// Stand-ins for everything that would call a model, a search provider or the ticket queue, so the browser tests are

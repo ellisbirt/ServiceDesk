@@ -1,28 +1,30 @@
-using PuppeteerSharp;
+using Microsoft.Playwright;
 
-namespace Helpdesk.UiTests.Infrastructure;
+namespace ServiceDesk.UiTests.Infrastructure;
 
 /// <summary>
-/// Finds a Chromium-based browser to drive. In order: <c>HELPDESK_UI_BROWSER</c> (a path to chrome or msedge), an installed
-/// Chrome or Edge, and only then a download of Chromium (about 150 MB, once, into the user's cache).
+/// Finds a Chromium-based browser to drive. In order: <c>SERVICEDESK_UI_BROWSER</c> (a path to chrome or msedge), an installed
+/// Chrome or Edge, and only then Playwright's own Chromium, which is downloaded once (about 150 MB, into the user's cache).
 /// </summary>
 public static class BrowserLocator
 {
-    public static async Task<string> FindAsync()
+    /// <summary>The executable to launch, or null to use the Chromium that Playwright manages (installing it if needed).</summary>
+    public static string? Find()
     {
-        var fromEnvironment = Environment.GetEnvironmentVariable("HELPDESK_UI_BROWSER");
+        var fromEnvironment = Environment.GetEnvironmentVariable("SERVICEDESK_UI_BROWSER");
         if (!string.IsNullOrWhiteSpace(fromEnvironment))
         {
             return File.Exists(fromEnvironment)
                 ? fromEnvironment
-                : throw new InvalidOperationException($"HELPDESK_UI_BROWSER ({fromEnvironment}) does not exist.");
+                : throw new InvalidOperationException($"SERVICEDESK_UI_BROWSER ({fromEnvironment}) does not exist.");
         }
 
         var installed = Candidates().FirstOrDefault(File.Exists);
         if (installed is not null) return installed;
 
-        var fetched = await new BrowserFetcher().DownloadAsync();
-        return fetched.GetExecutablePath();
+        var exitCode = Microsoft.Playwright.Program.Main(["install", "chromium"]);
+        if (exitCode != 0) throw new InvalidOperationException($"Installing Playwright's Chromium failed (exit code {exitCode}).");
+        return null;
     }
 
     private static IEnumerable<string> Candidates()

@@ -1,6 +1,6 @@
-using PuppeteerSharp;
+using Microsoft.Playwright;
 
-namespace Helpdesk.UiTests.Pages;
+namespace ServiceDesk.UiTests.Infrastructure;
 
 /// <summary>
 /// Base class of the page objects. A page object is the only place that knows how the screen is built (selectors, waits,
@@ -8,13 +8,13 @@ namespace Helpdesk.UiTests.Pages;
 /// </summary>
 public abstract class PageObject(IPage page)
 {
-    /// <summary>How long to wait for the screen to catch up before a test fails. Override with HELPDESK_UI_TIMEOUT_SECONDS.</summary>
+    /// <summary>How long to wait for the screen to catch up before a test fails. Override with SERVICEDESK_UI_TIMEOUT_SECONDS.</summary>
     public static TimeSpan Timeout { get; } =
-        TimeSpan.FromSeconds(double.TryParse(Environment.GetEnvironmentVariable("HELPDESK_UI_TIMEOUT_SECONDS"), out var s) ? s : 15);
+        TimeSpan.FromSeconds(double.TryParse(Environment.GetEnvironmentVariable("SERVICEDESK_UI_TIMEOUT_SECONDS"), out var s) ? s : 15);
 
     protected IPage Page { get; } = page;
 
-    /// <summary>Polls until <paramref name="condition"/> is true, or fails with <paramref name="description"/> and what was last seen.</summary>
+    /// <summary>Polls until <paramref name="condition"/> is true, or fails with <paramref name="description"/>.</summary>
     protected async Task WaitUntilAsync(Func<Task<bool>> condition, string description, TimeSpan? timeout = null)
     {
         var limit = timeout ?? Timeout;
@@ -28,7 +28,12 @@ public abstract class PageObject(IPage page)
         }
     }
 
-    protected Task<T> EvaluateAsync<T>(string script, params object[] args) => Page.EvaluateFunctionAsync<T>(script, args);
+    /// <summary>
+    /// Runs a JavaScript function in the page. <paramref name="script"/> is a function expression such as <c>(a, b) => a + b</c>;
+    /// the arguments are passed to it in order (Playwright itself takes a single argument, so they travel as an array).
+    /// </summary>
+    protected Task<T> EvaluateAsync<T>(string script, params object[] args) =>
+        Page.EvaluateAsync<T>($"args => ({script})(...args)", args);
 
     protected Task<bool> ExistsAsync(string selector) =>
         EvaluateAsync<bool>("sel => document.querySelector(sel) !== null", selector);
@@ -40,7 +45,11 @@ public abstract class PageObject(IPage page)
         EvaluateAsync<string>("sel => (document.querySelector(sel)?.textContent ?? '').trim()", selector);
 
     protected Task WaitForVisibleAsync(string selector) =>
-        Page.WaitForSelectorAsync(selector, new WaitForSelectorOptions { Visible = true, Timeout = (int)Timeout.TotalMilliseconds });
+        Page.WaitForSelectorAsync(selector, new PageWaitForSelectorOptions
+        {
+            State = WaitForSelectorState.Visible,
+            Timeout = (float)Timeout.TotalMilliseconds
+        });
 
     /// <summary>Clicks the first button inside <paramref name="container"/> whose text is exactly <paramref name="text"/>.</summary>
     protected async Task ClickButtonAsync(string container, string text)

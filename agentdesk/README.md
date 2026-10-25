@@ -277,8 +277,12 @@ cd backend; dotnet test AgentDesk.slnx    # domain rules, API (WebApplicationFac
 cd frontend
 npm run lint; npm run typecheck
 npm test                                  # vitest + Testing Library + axe (API client, formatting, App flows)
-npx playwright install chromium           # once
-npm run test:e2e                          # Playwright against a mocked API on :5175, with axe checks
+```
+
+The browser tests for this console are in the repository's separate UI test project (Playwright for .NET, against a mocked API, with axe checks):
+
+```powershell
+dotnet test ui-tests/ServiceDesk.UiTests --filter "FullyQualifiedName~AgentDeskUi"
 ```
 
 The backend tests use the in-memory stores and offline providers, so they need no emulator or API key. `AgentDeskFactory` pins the `assist` role back to `offline`, overriding the Anthropic setting in `appsettings.Development.json`.

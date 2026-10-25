@@ -11,7 +11,6 @@
     "lint": "eslint .",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test",
     "build:api": "tsc -b && vite build --outDir ../backend/src/Helpdesk.Api/wwwroot --emptyOutDir"
   },
   "dependencies": {
@@ -22,13 +21,11 @@
     "react-markdown": "^10.1.0"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.13.0",
     "@babel/core": "^8.0.7",
     "@babel/eslint-parser": "^8.0.7",
     "@babel/plugin-syntax-jsx": "^8.0.1",
     "@babel/plugin-syntax-typescript": "^8.0.3",
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.64.0",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.1",

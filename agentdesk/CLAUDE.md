@@ -7,7 +7,7 @@ AgentDesk is the agent console and ticket backend that continues the flow after 
 ```powershell
 cd agentdesk\backend; dotnet test AgentDesk.slnx              # offline: in-memory stores, offline LLM provider
 cd agentdesk\frontend; npm run lint; npm run typecheck; npm test
-cd agentdesk\frontend; npm run test:e2e                       # Playwright, mocked API on :5175
+dotnet test ui-tests\ServiceDesk.UiTests --filter "FullyQualifiedName~AgentDeskUi"   # browser tests (Playwright for .NET, mocked API, axe); all UI tests live in ui-tests/
 cd agentdesk\frontend; npm run debug                          # API :5139 (dotnet watch) + Vite :5174
 ```
 

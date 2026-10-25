@@ -16,12 +16,10 @@ cd frontend; npm install; npm run debug
 
 cd backend; dotnet test                                   # all backend tests
 dotnet test --filter "FullyQualifiedName~ConversationSigningTests"   # one class / name fragment
-dotnet test tests/Helpdesk.UiTests                          # browser tests (C#, xUnit, PuppeteerSharp, Page Object Model); needs Node and Chrome or Edge
-dotnet test --filter "Category!=UI"                         # the whole solution without the browser tests
 cd frontend; npm test                                      # vitest
 npx vitest run src/lib/auth.test.ts                        # one frontend file
 cd frontend; npm run lint; npm run typecheck
-cd frontend; npm run test:e2e                              # Playwright + axe, mocked API
+dotnet test ../ui-tests/ServiceDesk.UiTests                # ALL browser tests (C#, xUnit, Playwright, axe), kept apart from the unit tests; needs Node and Chrome or Edge
 cd frontend; npm run build:api                             # builds SPA into backend/src/Helpdesk.Api/wwwroot
 ```
 
@@ -31,7 +29,7 @@ cd frontend; npm run build:api                             # builds SPA into bac
 
 ## Architecture
 
-Projects: `Shared` (contracts/events) → `Core` (interfaces, `Telemetry`) → `Infrastructure` (Anthropic client, search providers, queues, DLP, JWT tenant provider) → `Api` (endpoints, SignalR hub, hosting). Tests: `tests/Helpdesk.Api.Tests` (`WebApplicationFactory`, fake Anthropic/queue clients), `tests/Helpdesk.Llm.Tests`, and `tests/Helpdesk.UiTests` (a real browser against the real API and the built SPA, with scripted model/search/queue; see its README). The SPA keeps `data-testid` hooks and ARIA labels the page objects rely on: change them together.
+Projects: `Shared` (contracts/events) → `Core` (interfaces, `Telemetry`) → `Infrastructure` (Anthropic client, search providers, queues, DLP, JWT tenant provider) → `Api` (endpoints, SignalR hub, hosting). Tests: `tests/Helpdesk.Api.Tests` (`WebApplicationFactory`, fake Anthropic/queue clients), `tests/Helpdesk.Llm.Tests`, (unit and API tests only). Browser tests are a separate project, `../ui-tests/ServiceDesk.UiTests` (Playwright for .NET: a real browser against the real API and the built SPA, with scripted model/search/queue; see `../ui-tests/README.md`), and are not in `Helpdesk.slnx`. The SPA keeps `data-testid` hooks and ARIA labels the page objects rely on: change them together.
 
 **One pipeline, two entry points.** `Chat/ChatPipeline.RunAsync` is shared by the SignalR path (`ChatHub` → `ChatJobQueue` → `ChatJobProcessor` background service → pipeline, events pushed to a per-user group) and the REST fallback (`POST /api/v1/chat/message`). Order is fixed and fail-closed: verify signed history → redact for `Model` → classify (regex prefilter in `GuardrailPolicyPrefilter`, then Claude with JSON-schema output) → route by lane. Nothing (inference, search, queue) runs before classification succeeds. The `PRIVATE_CORP` branch (`ChatPipeline.HandOffAsync`) lets the model lead a conversational hand-off: `ITicketInterviewer` returns either the next question or a ticket (title, summary, recommended action), and the pipeline shows a returned ticket to the user as a draft. It calls `ITicketQueuePublisher` only after the user confirms it: a draft is "pending" when the last signed assistant message ends with `Prompts.TicketConfirmPrompt`, and the model's `userConfirmed` counts only then (D2.6). There is no form or escalation endpoint; the policy-redirect behaviour lives in the `ComplianceCoach` and `TicketInterviewer` prompts.
 

@@ -1,26 +1,34 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
-namespace Helpdesk.UiTests.Infrastructure;
+namespace ServiceDesk.UiTests.Infrastructure;
+
+/// <summary>A front end the UI tests drive: its folder under the repository root, and the prefix of its environment overrides.</summary>
+public sealed record SpaApp(string Folder, string EnvPrefix)
+{
+    public static readonly SpaApp Helpdesk = new("helpdesk", "HELPDESK_UI");
+    public static readonly SpaApp AgentDesk = new("agentdesk", "AGENTDESK_UI");
+}
 
 /// <summary>
-/// Builds the React front end for the tests, into a folder of its own so the API's <c>wwwroot</c> is never touched. It is a
-/// <b>development-mode</b> build, which is what makes the app use dev auth (the headers the test API accepts) instead of
-/// signing in with Entra. The build is skipped when nothing under the front end changed since the last one.
-/// Set <c>HELPDESK_UI_SPA_DIR</c> to use a build you made yourself.
+/// Builds a React front end for the tests, into a folder of its own so nothing else is touched. It is a
+/// <b>development-mode</b> build, which is what makes the app use dev auth instead of signing in with Entra. The build is
+/// skipped when nothing under the front end changed since the last one. Set <c>HELPDESK_UI_SPA_DIR</c> or
+/// <c>AGENTDESK_UI_SPA_DIR</c> to use a build you made yourself.
 /// </summary>
 public static class SpaBuild
 {
-    public static string Ensure([System.Runtime.CompilerServices.CallerFilePath] string? thisFile = null)
+    public static string Ensure(SpaApp app, [CallerFilePath] string? thisFile = null)
     {
-        var fromEnvironment = Environment.GetEnvironmentVariable("HELPDESK_UI_SPA_DIR");
+        var fromEnvironment = Environment.GetEnvironmentVariable($"{app.EnvPrefix}_SPA_DIR");
         if (!string.IsNullOrWhiteSpace(fromEnvironment))
         {
             if (!File.Exists(Path.Combine(fromEnvironment, "index.html")))
-                throw new InvalidOperationException($"HELPDESK_UI_SPA_DIR ({fromEnvironment}) has no index.html.");
+                throw new InvalidOperationException($"{app.EnvPrefix}_SPA_DIR ({fromEnvironment}) has no index.html.");
             return fromEnvironment;
         }
 
-        var frontend = FindFrontend(thisFile);
+        var frontend = FindFrontend(app, thisFile);
         var output = Path.Combine(frontend, "dist-uitests");
         var stamp = Path.Combine(output, ".built");
         if (File.Exists(stamp) && File.Exists(Path.Combine(output, "index.html")) && File.GetLastWriteTimeUtc(stamp) >= NewestSource(frontend))
@@ -32,23 +40,23 @@ public static class SpaBuild
     }
 
     /// <summary>
-    /// Finds <c>helpdesk/frontend</c>: from <c>HELPDESK_UI_FRONTEND</c>, else by walking up from this source file (which works
+    /// Finds <c>&lt;app&gt;/frontend</c>: from <c>&lt;PREFIX&gt;_FRONTEND</c>, else by walking up from this source file (which works
     /// wherever the build output goes), else by walking up from the test binaries.
     /// </summary>
-    private static string FindFrontend(string? thisFile)
+    private static string FindFrontend(SpaApp app, string? thisFile)
     {
-        var fromEnvironment = Environment.GetEnvironmentVariable("HELPDESK_UI_FRONTEND");
+        var fromEnvironment = Environment.GetEnvironmentVariable($"{app.EnvPrefix}_FRONTEND");
         if (!string.IsNullOrWhiteSpace(fromEnvironment) && File.Exists(Path.Combine(fromEnvironment, "package.json"))) return fromEnvironment;
 
         foreach (var start in new[] { thisFile is null ? null : Path.GetDirectoryName(thisFile), AppContext.BaseDirectory }.OfType<string>())
         {
             for (var dir = new DirectoryInfo(start); dir is not null; dir = dir.Parent)
             {
-                var candidate = Path.Combine(dir.FullName, "frontend");
-                if (File.Exists(Path.Combine(candidate, "package.json")) && Directory.Exists(Path.Combine(dir.FullName, "backend"))) return candidate;
+                var candidate = Path.Combine(dir.FullName, app.Folder, "frontend");
+                if (File.Exists(Path.Combine(candidate, "package.json"))) return candidate;
             }
         }
-        throw new InvalidOperationException("Could not find helpdesk/frontend. Set HELPDESK_UI_FRONTEND to its path.");
+        throw new InvalidOperationException($"Could not find {app.Folder}/frontend. Set {app.EnvPrefix}_FRONTEND to its path.");
     }
 
     private static DateTime NewestSource(string frontend)

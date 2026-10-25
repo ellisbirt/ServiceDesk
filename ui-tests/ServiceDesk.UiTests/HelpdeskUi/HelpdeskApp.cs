@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
-namespace Helpdesk.UiTests.Infrastructure;
+namespace ServiceDesk.UiTests.HelpdeskUi;
 
 /// <summary>
 /// The real helpdesk API and the built front end, listening on a real loopback port so a browser can use them. The model,

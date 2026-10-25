@@ -1,6 +1,6 @@
-using Helpdesk.UiTests.Infrastructure;
+using ServiceDesk.UiTests.Infrastructure;
 
-namespace Helpdesk.UiTests.Tests;
+namespace ServiceDesk.UiTests.HelpdeskUi;
 
 /// <summary>Policy requests get guidance; problems the assistant cannot solve become a ticket through conversation, not a form.</summary>
 public sealed class HandOffTests(UiFixture fixture) : UiTest(fixture)
@@ -45,8 +45,8 @@ public sealed class HandOffTests(UiFixture fixture) : UiTest(fixture)
         Assert.Equal(ScriptedInterviewer.Question, question.Text);
         Assert.Null(question.Notice); // nothing has been sent yet
         Assert.Empty(App.Publisher.Sent);
-        Assert.Equal(1, await Page.EvaluateFunctionAsync<int>("() => document.querySelectorAll('form').length")); // only the message box
-        Assert.Equal(1, await Page.EvaluateFunctionAsync<int>("() => document.querySelectorAll('textarea').length"));
+        Assert.Equal(1, await Page.EvaluateAsync<int>("() => document.querySelectorAll('form').length")); // only the message box
+        Assert.Equal(1, await Page.EvaluateAsync<int>("() => document.querySelectorAll('textarea').length"));
 
         var draft = await Chat.AskAsync("The Contoso client.");
 

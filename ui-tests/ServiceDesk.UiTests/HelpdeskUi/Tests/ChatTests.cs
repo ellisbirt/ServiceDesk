@@ -1,6 +1,6 @@
-using Helpdesk.UiTests.Infrastructure;
+using ServiceDesk.UiTests.Infrastructure;
 
-namespace Helpdesk.UiTests.Tests;
+namespace ServiceDesk.UiTests.HelpdeskUi;
 
 public sealed class ChatTests(UiFixture fixture) : UiTest(fixture)
 {
@@ -111,12 +111,12 @@ public sealed class ChatTests(UiFixture fixture) : UiTest(fixture)
     {
         await Chat.AskAsync("Show me markdown please.");
 
-        var html = await Page.EvaluateFunctionAsync<string>("() => document.querySelector('[data-testid=\"message-body\"]').innerHTML");
+        var html = await Page.EvaluateAsync<string>("() => document.querySelector('[data-testid=\"message-body\"]').innerHTML");
         Assert.Contains("<strong>Bold step</strong>", html);
         Assert.Contains("<code>ipconfig /all</code>", html);
         Assert.Equal(2, Regex.Matches(html, "<li>").Count);
         Assert.DoesNotContain("<script", html, StringComparison.OrdinalIgnoreCase);
-        Assert.False(await Page.EvaluateFunctionAsync<bool>("() => window.__injected === true"));
+        Assert.False(await Page.EvaluateAsync<bool>("() => window.__injected === true"));
     }
 
     [Fact]

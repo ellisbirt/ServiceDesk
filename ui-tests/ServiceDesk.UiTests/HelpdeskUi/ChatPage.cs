@@ -1,7 +1,8 @@
 using System.Text.Json;
-using PuppeteerSharp;
+using Microsoft.Playwright;
+using ServiceDesk.UiTests.Infrastructure;
 
-namespace Helpdesk.UiTests.Pages;
+namespace ServiceDesk.UiTests.HelpdeskUi;
 
 /// <summary>One thing in the conversation, as a person sees it.</summary>
 /// <param name="Kind">user, assistant, error, live (still arriving) or stopped.</param>
@@ -41,8 +42,7 @@ public sealed class ChatPage : PageObject
     /// <summary>Opens the app and waits until it is ready for a message.</summary>
     public static async Task<ChatPage> OpenAsync(IPage page, Uri address)
     {
-        await page.SetViewportAsync(new ViewPortOptions { Width = 1280, Height = 900 });
-        await page.GoToAsync(address.ToString());
+        await page.GotoAsync(address.ToString());
         var chat = new ChatPage(page);
         await chat.WaitForVisibleAsync(Input);
         return chat;
@@ -217,9 +217,9 @@ public sealed class ChatPage : PageObject
     /// <summary>Chooses files with the attach button's file picker.</summary>
     public async Task AttachAsync(params string[] paths)
     {
-        var input = await Page.QuerySelectorAsync(FileInput)
-            ?? throw new InvalidOperationException("There is no file picker: attachments are switched off.");
-        await input.UploadFileAsync(paths);
+        if (await CountAsync(FileInput) == 0)
+            throw new InvalidOperationException("There is no file picker: attachments are switched off.");
+        await Page.SetInputFilesAsync(FileInput, paths);
     }
 
     /// <summary>

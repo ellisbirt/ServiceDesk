@@ -14,6 +14,7 @@ I built it with AI assistance (Claude Code), and the commit trailers say so. The
 | [`agentdesk/`](agentdesk/) | A downstream agent console: a .NET 10 API plus a React UI that stores tickets in Cosmos DB and attachments in Blob Storage, with a knowledge base and LLM reply assist. Secondary to `helpdesk/`. |
 | [`evals/`](evals/) | The source of truth for the assistant prompt and its tests: `system-prompt.md`, `cases.json` and a scoring `rubric.md`. |
 | [`python-evals/`](python-evals/) | `promptevals`, a Python CLI that runs the cases against a prompt variant, grades the results and compares variants. |
+| [`ui-tests/`](ui-tests/) | All the browser tests, in one .NET project (Playwright for .NET, with axe accessibility checks), covering both apps and kept apart from the unit tests. |
 | [`docs/`](docs/) | [`design-decisions.md`](docs/design-decisions.md): what I decided, why, what it costs, and the known gaps. Start here to see how I think about the design. |
 
 ## Scope

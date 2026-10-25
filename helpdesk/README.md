@@ -258,14 +258,14 @@ When a token can no longer be renewed silently, the UI redirects to sign-in at m
 ## Tests
 
 ```powershell
-cd backend;  dotnet test                                # includes the browser tests
-cd backend;  dotnet test tests/Helpdesk.UiTests        # browser tests only (needs Node and Chrome or Edge)
-cd backend;  dotnet test --filter "Category!=UI"        # everything except the browser tests
-cd frontend; npm test
+cd backend;  dotnet test                                # unit and API tests only
+cd frontend; npm test                                   # vitest: unit and component tests in a simulated DOM
 cd frontend; npm run lint
 cd frontend; npm run typecheck
-cd frontend; npm run test:e2e   # Playwright + axe against a mocked API (first time: npx playwright install chromium)
+dotnet test ../ui-tests/ServiceDesk.UiTests             # all browser tests (Playwright for .NET, with axe checks): Node and Chrome or Edge needed
 ```
+
+The browser tests are deliberately separate from the unit tests and cover both apps; see [`../ui-tests/README.md`](../ui-tests/README.md).
 
 ## Asynchronous chat (SignalR)
 
@@ -348,8 +348,8 @@ These were found in an enterprise/SaaS review and are deliberately not fixed yet
 
 - **Delivery pipeline.** The project is not under source control and has no CI, container image, infrastructure as code, central package management (`Directory.Packages.props`), analyzers, `TreatWarningsAsErrors`, NuGet lock files, dependency or vulnerability scanning, or SBOM. Add these, and extend `backend/.gitignore` (`.vs/`, `*.user`, `TestResults/`) and ignore `frontend/tsconfig.tsbuildinfo`.
 - Authentication against Entra
-  - Limit usage 
-  - Pull 
+  - Limit unauthenticated usage to login access problems
+  - Pull user details and add to support tickets.  Display in AgentDesk
 
 ## Deviations from the spec and open items
 

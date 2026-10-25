@@ -12,4 +12,3 @@ __pycache__/
 .env.local
 dist/
 test-results/
-playwright-report/

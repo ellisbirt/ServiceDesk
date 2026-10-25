@@ -1,7 +1,7 @@
 using System.Text;
-using Helpdesk.UiTests.Infrastructure;
+using ServiceDesk.UiTests.Infrastructure;
 
-namespace Helpdesk.UiTests.Tests;
+namespace ServiceDesk.UiTests.HelpdeskUi;
 
 public sealed class AttachmentTests(UiFixture fixture) : UiTest(fixture)
 {
