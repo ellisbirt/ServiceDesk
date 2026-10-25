@@ -1,5 +1,7 @@
 # Helpdesk Triage & Ingestion
 
+> Design decisions and the reasons behind them: [`../docs/design-decisions.md`](../docs/design-decisions.md).
+
 Implementation of `helpdesk-ingestion-spec.md`: a multi-tenant AI triage pipeline with a security guardrail router, and a React chat UI.
 
 ```
@@ -8,7 +10,7 @@ helpdesk/
   frontend/   React 19 + TypeScript + Vite + Tailwind
 ```
 
-** NB: ** This is a work in progress and part of a larger system that has not been fully implemented.
+** NB: ** This is a work in progress and part of a larger system that has not been fully implemented.  The project is a personal project to bring together enterprise SaaS and AI concepts
 
 ## Run locally (no cloud accounts needed)
 
@@ -45,6 +47,17 @@ Set secrets with `dotnet user-secrets` or environment variables (`Anthropic__Api
 | `Auth:Authority` / `Auth:Audience` | Entra External ID JWT validation (e.g. `https://<tenant>.ciamlogin.com/<tenant-id>/v2.0`). Tokens must carry the `tenant_id` claim. |
 | `Anthropic:ApiKey`, `Anthropic:Model` | Claude access. If `Anthropic:ApiKey` is empty the standard `ANTHROPIC_API_KEY` environment variable is used (the same one the evals read). Default model `claude-sonnet-5-5`; override with `Anthropic__Model`. |
 | `Llm:Roles:chat` | Optional. This uses the shared `Helpdesk.Llm` role configuration (`Provider`, `Model`, `ApiKey`, `Endpoint`, …, the same shape AgentDesk uses). When it is unset, the legacy `Anthropic` section defines the chat role. |
+| `Anthropic:FastModel`, `Anthropic:DeepModel`, `Llm:Roles:chat:FastTier:Model`, `Llm:Roles:chat:DeepTier:Model` | The vendor's cheaper and stronger models for the Fast and Deep tiers (see "Model tiers and routing"). Empty uses the vendor default: Claude Haiku and Claude Opus for Anthropic, and the role's own `Model` for every other vendor. `FastTier` and `DeepTier` also take `InputCostPerMillionUsd`, `OutputCostPerMillionUsd`, `CacheWriteCostPerMillionUsd` and `CacheReadCostPerMillionUsd`; without them a tier model's cost is not estimated, so it is never priced at the standard model's rates. |
+| `Anthropic:RouterMaxTokens` | Ceiling for the classifier's reply (default 768). The fast model sometimes writes a long reasoning note; at 256 about one reply in six was cut off and had to be retried. |
+| `Attachments:Provider` | Where uploaded files are kept: `Azure` (Blob Storage) or `InMemory`. Empty means `InMemory` in Development and **attachments off** everywhere else, so a production deployment never keeps files in memory by accident. See "Attachments". |
+| `Attachments:ConnectionString` or `Attachments:ServiceUri` (managed identity), `Attachments:Container` | The storage account and the container. The container (default `ticket-attachments`) must be the one AgentDesk reads, its `Blobs:Container`, on the same account. |
+| `Attachments:MaxFileBytes`, `MaxImageBytes`, `MaxFilesPerMessage`, `MaxFilesPerConversation`, `MaxTotalBytesPerConversation` | Upload limits: 10 MB per file, 5 MB per image, 5 files per message, 20 and 25 MB per conversation by default. |
+| `Attachments:AllowedExtensions` | Narrows the accepted types (for example `[".txt", ".log", ".png"]`). Empty allows everything supported: `.txt .log .csv .json .md .png .jpg .jpeg .gif .webp .pdf .docx .xlsx .pptx`. |
+| `Attachments:MaxExtractedTokensPerFile`, `MaxEarlierTokensPerFile`, `MaxTokensPerRequest`, `ImageTokenEstimate` | How much file text the model is shown: 20,000 tokens per file on the message that carries it, 1,500 on later turns, 40,000 across all files in a request. Longer files are reduced, not cut. |
+| `Attachments:PasteMinChars`, `PasteMinLines` | The browser turns pasted text into an attachment at this length (default 1,500 characters or 25 lines), or sooner if it looks like a log. |
+| `Attachments:RetentionHours`, `CleanupIntervalMinutes` | Files from conversations that never raised a ticket are deleted after 24 hours; the cleanup runs every 30 minutes. |
+| `Attachments:MaxOfficeUncompressedBytes`, `MaxOfficeEntries`, `MaxPdfPages`, `MaxExtractedChars` | Parsing limits against zip bombs and huge documents. |
+| `Llm:Roles:chat:SupportsVision` | Whether the model can read images. Unset assumes yes for Anthropic, OpenAI, Azure OpenAI and Grok, and no for Ollama and LM Studio (it depends on the loaded model). |
 | `Anthropic:WebSearchToolType`, `Anthropic:WebSearchMaxUses` | Anthropic-hosted Claude web search tool version (default `web_search_20260318`) and maximum searches per request (default 3). |
 | `Search:Provider` | Web search backend for the `PUBLIC_SEARCH` lane. One of `Tavily`, `Brave`, `Serper`, `Google`, `SearXNG`, or `Claude` (see "Web search providers"). Leave it empty to follow the chat vendor: a third-party provider that already has credentials (or the legacy `Search:ApiKey`, which means Tavily) is used first, then Claude's own web search when the chat vendor is Anthropic, otherwise Tavily (a stub until it has a key). |
 | `Search:Providers:<Name>:ApiKey` | Credentials for the chosen provider. `Search:ApiKey` is a shorthand for the active provider. `Google` also needs `SearchEngineId`; `SearXNG` needs `BaseUrl` instead of a key. If the chosen provider has no credentials, a stub is used and search answers say no results are available. |
@@ -78,6 +91,59 @@ Set secrets with `dotnet user-secrets` or environment variables (`Anthropic__Api
 | `Http:MaxRequestBodyBytes` | Largest request body on `/api` paths (default 131072, i.e. 128 KB, up to 4 MB). Larger requests get 413 `request_too_large`. Must cover a full-length conversation; the startup check enforces the minimum. |
 | `Http:Csp:AuthorityOrigins`, `Http:Csp:Policy` | Content-Security-Policy for the hosted SPA. Authority origins default to the origin of `Auth:Authority`; `Policy` replaces the generated policy. `AllowedHosts: *` is reported as a warning by `/status`. |
 | `Chat:KeepAliveSeconds`, `Chat:ClientTimeoutSeconds` | SignalR transport ping (default 15) and client timeout (default 60). Keep the timeout at least twice the ping. The UI client uses a 60 s server timeout to match. |
+
+## Model tiers and routing
+
+The vendor is fixed for a run of the backend: `Llm:Roles:chat` (or the `Anthropic` section) picks one. Within it each vendor provides three tiers, and every model call names the tier it needs:
+
+| Tier | Anthropic default | Used for |
+|---|---|---|
+| Fast | `claude-haiku-5-5` | The classifier; simple, short questions |
+| Standard | `Model` (`claude-sonnet-5-5`) | The default; the policy coach and the ticket interviewer; ordinary questions |
+| Deep | `claude-opus-5-5` | Complex questions and very large inputs |
+
+A vendor with fewer models serves several tiers with the same one. OpenAI, Azure OpenAI, Grok, Ollama and LM Studio have no built-in tier models, so every tier uses the role's `Model` until `FastTier:Model` and `DeepTier:Model` are set (for LM Studio that means one local model for everything, or two or three if you load them). `/status` reports which model serves each tier.
+
+**What decides the tier** (fixed in code, not configurable: `InferenceRoutePolicy`). It applies to the `PUBLIC_TECH` and `PUBLIC_SEARCH` answers, after classification:
+
+1. **Deep** if the estimated input is at least 12,000 tokens (about four characters per token, counting the message, the history, retrieved KB articles and search results), or the classifier rated the request `complex`.
+2. **Fast** if the classifier rated it `simple`, the input is at most 1,500 tokens, and the conversation has at most four user messages.
+3. **Standard** otherwise.
+
+The classifier itself runs on the Fast tier and returns a `complexity` of `simple`, `standard` or `complex` with the lane, at no extra call. The rating comes from the message content, and the classifier prompt tells it to ignore any request about which model to use; the size comes from the server's own measurement. A user can still make a question look complex, so spend on the Deep tier is bounded only by the per-user rate limit and the per-tenant job limit (there are no per-tenant cost controls).
+
+**When a cheaper model falls short.** An unusable classification from the Fast model is retried once on the Standard model before failing closed. A Fast request the model refuses is repeated once on the Standard model, unless it is streamed (text may already have reached the user), in which case the existing refusal path gives guidance instead. Neither retry happens when the two tiers are the same model.
+
+**Observability.** Each routed answer increments `helpdesk.inference.routes` (tags `lane`, `tier`, `reason`) and logs the tier, reason and estimated size; the span carries `helpdesk.inference.tier`. Token and cost metrics are tagged with the model that served the call, so savings show up per model.
+
+## Attachments
+
+Users can attach files to a message: **text** (`.txt .log .csv .json .md`), **images** (`.png .jpg .jpeg .gif .webp`), **PDF**, and the modern **Office** formats (`.docx .xlsx .pptx`). Video, audio, archives, executables, macro-enabled files (`.docm`) and the legacy binary Office formats (`.doc .xls .ppt`) are refused. Pasting a long block of text, such as a log, into the message box turns it into an attachment (`pasted-log-<time>.txt`) with a "Paste as text instead" undo. Every limit is configurable (see Configuration); see `docs/design-decisions.md` for why it works this way.
+
+### How it works
+
+1. **Upload.** `POST /api/v1/chat/attachments` (multipart: `conversationId`, `file`) streams the file through the API, which checks it before keeping it: the type is decided from the **content** (magic bytes, Office package structure, text decoding), never from the name or the declared content type, and must match the extension; then the size, the count and the conversation's total are checked. The reply is an `AttachmentRef` (`id`, `name`, `contentType`, `size`, `sha256`, `kind`, `token`). Errors are problem JSON with a `code`: `unsupported_type` (415), `file_too_large` (413), `too_many_files` and `conversation_quota_exceeded` (400), `unreadable_file` (422), `rate_limited` (429), `attachments_disabled` (404). `GET /api/v1/chat/attachments/config` reports `enabled` and the limits so the UI can match them, and `DELETE /api/v1/chat/attachments/{id}?conversationId=` removes a file that has not become part of a ticket.
+2. **Reference.** The client sends the refs back unchanged on the message that uses them (`attachments`) and on that message in the stored history. `token` is an HMAC over the attachment id, bound to the tenant, user and conversation with the conversation signing keys, so a reference cannot be forged or used from another conversation. The server ignores the descriptive fields and reads the file's real name, type and size from storage. Messages are not re-signed; a user may attach any of their own uploads to any of their own messages.
+3. **Extraction.** Text is decoded (UTF-8, UTF-16 with a byte-order mark, or the Windows code page). Office files are read as XML inside the zip and **never opened by Office**, so macros and embedded objects cannot run. PDFs are read with PdfPig. A PDF with no text layer (a scan) is flagged so it can be sent to the model as a document instead. All reads are bounded (zip-bomb, XML entity, page and size limits). The extracted text is stored next to the file.
+4. **What the model sees.** The current message's files are shown in full up to a token budget; long files are **reduced, not truncated**: the start, the end and the lines that look like errors or stack frames, with a note of how much was left out. Files from earlier messages are shown as short excerpts, so a long log is not re-sent on every turn. File text is redacted for the model (secrets only by default), wrapped as untrusted data with a per-file nonce, and the system prompt tells the model never to follow instructions inside it. Images and scanned PDFs go to the model natively when its vendor supports it (Anthropic: images and PDFs; OpenAI-style: images); a model that cannot see images is told which ones it was not given, so it says so.
+5. **Routing and cost.** The estimated size of the files counts towards the model tier (see "Model tiers and routing"): a large log moves the question to the Deep tier. Images count as a fixed estimate each.
+6. **The ticket.** When the model raises a ticket, the event carries `attachments[]` (`id`, `fileName`, `contentType`, `size`, `sha256`, `blobPath`, `scanStatus`) and an "Attachments" line in `details`. The files are already in the shared container, so AgentDesk records them against the ticket **without copying**; they are then kept. The interviewer sees each file's name and a short excerpt, so the summary can be specific.
+
+### Storage and retention
+
+Files are written to `intake/{tenantId}/{conversationId}/{attachmentId}/content`, with the extracted text in `extracted.txt` beside them and the details kept as blob metadata, in the container AgentDesk reads. AgentDesk accepts only paths under `intake/{its own tenant}/`. Files from conversations that never raised a ticket are deleted by a background job after `Attachments:RetentionHours`; a file on a raised ticket is marked (`ticket` metadata) and never deleted by it. In Development with no provider configured, files are kept in memory: they vanish on restart and AgentDesk cannot see them. To test end to end locally, run Azurite and set `Attachments__Provider=Azure` and `Attachments__ConnectionString=UseDevelopmentStorage=true` here and `Blobs__Provider=Azure` with the same connection string in AgentDesk.
+
+### Not scanned (placeholder)
+
+**Uploads are not scanned for malware.** `IAttachmentScanner` is the place a scanner plugs in (it receives the stored file's details and bytes and returns `clean`, `not_scanned` or `infected`; `infected` refuses the upload). The only implementation today, `NoOpAttachmentScanner`, scans nothing and returns `not_scanned`; that status is stored with the file, sent on the ticket event and shown by AgentDesk, so nobody mistakes an unscanned file for a clean one. `/status` says so. Until a scanner is added, treat attachments as untrusted: they are never executed or opened by Office on the server, but an agent who downloads one from a ticket does so at their own risk. To add scanning, register your own `IAttachmentScanner` (for example over Microsoft Defender for Storage or ClamAV) before `AddAttachments`; the default is registered only if none exists.
+
+### Privacy notes
+
+- **Images go to the model as they are.** They cannot be redacted the way text can, so a screenshot containing a password, a personal detail or a customer record is sent to the model provider. This was a deliberate choice; add OCR-based redaction (or hold images back) if your data rules require it.
+- **The originals are stored unredacted.** Redaction applies to what the model sees and to the ticket's summaries, not to the file, which an agent can download from the ticket as uploaded. A log with a secret in it still contains that secret on disk.
+- **Redaction happens after reduction** (the scan is smaller and secrets in dropped lines never leave the service).
+- **Names and contents are not logged.** Only the kind, size and tenant are.
+- Uploads are rate limited per user (`RateLimit:AttachmentsPerMinute`, default 30), and the request-body limit on the upload path is `Attachments:MaxFileBytes` plus 1 MB instead of `Http:MaxRequestBodyBytes`.
 
 ## Knowledge-base retrieval
 
@@ -158,6 +224,10 @@ To add a provider, implement `ISearchProvider` in `Infrastructure/Search/Provide
 
 Copy `frontend/.env.example` to `.env.local`. Set `VITE_ENTRA_CLIENT_ID`, `VITE_ENTRA_AUTHORITY` and `VITE_API_SCOPE` to enable MSAL sign-in; leave them empty for dev-auth headers. `VITE_API_BASE_URL` is only needed if the API is not served from the same origin or proxy.
 
+When the ticket queue is unavailable, the latest failed turn offers a Retry button with a disabled countdown. It uses the server's retry delay when supplied, otherwise `VITE_QUEUE_RETRY_DELAY_SECONDS` (default `15`, non-negative seconds). Restart Vite or rebuild the frontend after changing this setting. Retry resends the original message and signed history without duplicating the user bubble or clearing a draft. Sending another message or starting a new conversation removes the old retry action. Retrying is manual; queue delivery is not exactly-once, so a lost acknowledgement from storage can still cause a duplicate ticket.
+
+While a reply is in progress, **Stop** cancels the hub job or aborts the HTTP fallback request. Any text already received remains visible as a stopped, unsigned reply and is not sent as conversation history. Your draft and pending attachments are preserved. Late results from the stopped request are ignored. If hub cancellation cannot be confirmed, the UI says so; stopping cannot undo a ticket that has already been queued or work that has already completed.
+
 A production build (`npm run build`, `npm run build:api`) fails unless all three Entra variables are set; dev-auth headers are only ever sent from the Vite dev server (`--mode development`). `npm run build:api` writes the SPA to `backend/src/Helpdesk.Api/wwwroot`, and the API serves it with security headers and the CSP above (unknown file paths return 404; other paths fall back to `index.html`).
 
 When a token can no longer be renewed silently, the UI redirects to sign-in at most once per browser session; after that it shows a "Your session has expired" banner with a **Sign in** button instead of looping.
@@ -179,7 +249,7 @@ A model call can be slow, and when Anthropic answers HTTP 429 the `Retry-After` 
 
 **The model leads the hand-off, in conversation.** The `PRIVATE_CORP` lane covers company-system requests and general IT issues the user asks to send to the service desk. Each turn on that lane calls the ticket interviewer (`ITicketInterviewer`, prompt `Prompts.TicketInterviewer`) with the redacted conversation. It returns structured output: either `raiseTicket: false` with the next question (asked only for what is still missing), or `raiseTicket: true` with a title, a summary, a recommended action and any steps already tried. A request the rules do not allow, such as someone else's password, is turned into a ticket for the correct route (for example, access on the user's own account), and the reasoning goes in the recommended action. The model decides when it has enough; `Chat:MaxInterviewTurns` is only a backstop in code (see Configuration). There is no form and no pending state, so nothing is stored between turns beyond the signed transcript.
 
-When the model raises the ticket, the pipeline publishes one `ProcessPrivateCorpTicketEvent` itself. The operator is not given the transcript. The event carries two separate fields: `summary` (what the user needs now) and `conversationSummary` (a short chronological summary of the chat: what was asked, tried and said, with contact details, device names and error messages kept exactly as given). `details` repeats both, with the recommended action and steps already tried, as labelled answers; `sanitizedPayload` is the same content as text for consumers that ignore the structured fields, and `subject` is the title. Both summaries are written from the Model-redacted conversation and redacted again with the Queue policy. The event id is derived from the tenant, user, conversation and history length, so a retried request republishes the same id, which the consumer deduplicates. The reply carries `metadata.ticketRaised = "true"` and `metadata.ticketEventId`, and the UI shows "Sent to the service desk". If the interviewer fails the API returns `502` (`interview_failed`); a queue failure returns `503`. In offline Development mode a canned interviewer asks one question and raises the ticket on the next message.
+When the model has enough, it drafts the ticket and the pipeline shows the draft to the user (everything the operator will receive) with a closing question, "Shall I send this to the service desk?", and `metadata.ticketPending = "true"`. Nothing is queued yet. The UI offers "Send to the service desk" and "Don't send" buttons; typing an answer works too. Only when the user agrees to that draft does the pipeline publish one `ProcessPrivateCorpTicketEvent` itself. The pipeline recognises a pending draft from the signed history (the last assistant message ends with the closing question), and ignores the model's own claim of confirmation if none is pending. The operator is not given the transcript. The event carries two separate fields: `summary` (what the user needs now) and `conversationSummary` (a short chronological summary of the chat: what was asked, tried and said, with contact details, device names and error messages kept exactly as given). `details` repeats both, with the recommended action and steps already tried, as labelled answers; `sanitizedPayload` is the same content as text for consumers that ignore the structured fields, and `subject` is the title. Both summaries are written from the Model-redacted conversation and redacted again with the Queue policy. The event id is derived from the tenant, user, conversation and history length, so a retried request republishes the same id, which the consumer deduplicates. The reply carries `metadata.ticketRaised = "true"` and `metadata.ticketEventId`, and the UI shows "Sent to the service desk". If the interviewer fails the API returns `502` (`interview_failed`); a queue failure returns `503`. In offline Development mode a canned interviewer asks one question, drafts the ticket on the next message, and queues it when you reply yes.
 
 The HTTP `User-Agent` is also passed to the classifier, response model and ticket interviewer as a bounded `<client_context>` block. It is client-supplied, treated as untrusted metadata rather than instructions or proof of identity, and may be used only where relevant to client-specific troubleshooting.
 

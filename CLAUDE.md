@@ -15,6 +15,8 @@ Development of a system prompt for an IT service-desk assistant (ticket classifi
 - `evals/` — the **single source of truth** for the prompt and its tests: `system-prompt.md` (the prompt under development), `cases.json` (eval cases with stable IDs), `rubric.md` (0–10 scoring, pass = all `must` satisfied, no `must_not` hit, score ≥ 8). Language/SDK-agnostic.
 - `python-evals/` — `promptevals`, a Python package/CLI that reads `../evals/` via paths in `python-evals/evals.toml`. `python-evals/README.md` is the full user guide (case format, check types, output layout); read it before changing CLI behaviour.
 
+Design decisions and their reasons are recorded in `docs/design-decisions.md`; read it before changing behaviour that it covers, and add to it when you make a new decision.
+
 ## Commands (run from `python-evals/`, PowerShell)
 
 ```powershell
