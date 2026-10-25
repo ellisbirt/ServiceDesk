@@ -21,7 +21,7 @@ dev = ["pytest>=8", "jsonschema>=4"]
 promptevals = "promptevals.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["promptevals*"]
+include = ["promptevals*", "service_desk_evals*"]
 
 [tool.setuptools.package-data]
 promptevals = ["report/*.mjs"]

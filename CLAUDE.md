@@ -28,6 +28,10 @@ promptevals selftest                                # offline harness check (fre
 promptevals run --variant baseline                  # PAID: samples + grades every case
 promptevals compare baseline v1
 promptevals report                                  # HTML report needs node or bun on PATH
+
+# Evals for the REAL app (classifier, lanes, hand-off). Needs the intake API running with a model key: PAID.
+python -m service_desk_evals.prompts_export         # re-export Prompts.cs to ../evals/app-prompts.md (--check = verify)
+promptevals --config evals.app.toml run --variant baseline
 ```
 
 `run`, `regrade`, `generate`, and `selftest --judge` make paid API calls and prompt for confirmation (`--yes` skips it). Don't run them without the user's go-ahead. `--config` selects a different toml.
@@ -39,6 +43,7 @@ promptevals report                                  # HTML report needs node or 
 - Variant names must match `^(baseline|v\d+)$`. Each variant snapshots its prompt, and the runner refuses to re-run a variant if the prompt changed since (use a new variant name, or `run --force` to discard the old results). `clean_prompt` strips `<!-- -->` comments before the prompt reaches the model.
 - `llm.py` is the only place that calls the Anthropic SDK: jittered retries, a served-model mismatch check (`ServedModelMismatch`), structured outputs, and a `UsageMeter`. Judge spend is metered separately; `stats.py` holds the price table and the Wilson/paired CI maths (no numpy).
 - `graders/`: subclass `Grader` (`base.py`), declare `metrics`, implement async `grade(ctx) -> GradeResult`, then register it in `build_graders` in `graders/__init__.py`. A case passes only if every applicable grader passes. `code.py` covers deterministic `checks`. `judges.py` covers the checklist, rubric, and pairwise LLM judges, which treat the response as untrusted data. `human.py` covers CSV export/import and judge-agreement reporting.
+- `service_desk_evals/` (a second package beside `promptevals`) runs the harness against the real intake API: `prompts_export` writes the C# prompts from `Prompts.cs` to `evals/app-prompts.md` (a pytest guards drift), and `target.respond` is the `entrypoint` used by `evals.app.toml`. Cases are `evals/app-cases.json`. See `python-evals/README.md`, "Evals for the running app".
 - `fake.FakeClient` is an offline stand-in for `AsyncAnthropic` (a responder takes the request kwargs). It's used by the tests, by `selftest`, and by `demo.py` (the notebook's `DEMO = True` mode, which writes to `runs-demo/`).
 - `generate.py` writes proposed cases to `../evals/cases.proposed.json` + `.md`. They're only merged into `cases.json` through `promptevals accept`.
 - `report.py` writes `summary.md`/`compare` output and shells out to `report/build-report-lite.mjs` for `report.html`.

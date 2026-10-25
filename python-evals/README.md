@@ -205,6 +205,53 @@ def respond(system_prompt: str, messages: list[dict], case) -> str | dict:
             "stop_reason": resp.stop_reason}
 ```
 
+## Evals for the running app
+
+`evals/system-prompt.md` is a draft prompt. The app runs different prompts (the C# constants in `Prompts.cs`), so a second
+config, `evals.app.toml`, measures **the real service** instead: the regex pre-filter, the classifier, the lane routing,
+the coach and the ticket interviewer with its draft confirmation. It uses the `entrypoint` hook above
+(`service_desk_evals.target:respond`), so each case is sent to a running intake API, and cases assert on what the app
+did. Grading is `code` only: deterministic JSON-schema checks, no LLM judge.
+
+```powershell
+# 1. Export the shipped prompts (the app does not read this file; variants snapshot it so a prompt change needs a new variant)
+python -m service_desk_evals.prompts_export            # writes ../evals/app-prompts.md; --check fails if it is stale
+
+# 2. Start the real API with a chat provider. PAID: every non-pre-filtered case makes real model calls.
+cd ..\helpdesk\backend\src\Helpdesk.Api
+$env:Kb__Provider = ""                                 # keep the knowledge base off (it is on in your user secrets)
+dotnet run --launch-profile http                       # Development, on :5129, with Anthropic:ApiKey or ANTHROPIC_API_KEY set
+
+# 3. Run the cases (from python-evals/). SERVICE_DESK_EVAL_URL overrides http://localhost:5129
+promptevals --config evals.app.toml validate
+promptevals --config evals.app.toml run --variant baseline
+promptevals --config evals.app.toml report
+```
+
+After `pip install -e .` has been run before this folder existed, run it once more so the `promptevals` command can import
+`service_desk_evals` (`python -m promptevals` always can).
+
+- **What a case sees.** The entrypoint returns a JSON summary: `lane`, `ticketPending` (a draft is waiting), `ticketRaised`,
+  `draftReached` (an earlier turn showed a draft), `everRaised`, per-turn detail and the reply text. Every case but one asserts
+  `everRaised` is false, which is the property "nothing is queued without the user's confirmation".
+- **Replay, not transcript.** The app trusts only history it signed, so the entrypoint sends the case's **user** turns one at
+  a time and feeds the app's own replies back. Assistant turns written in a case are ignored (they document what was expected).
+- **Case sources.** The 16 labelled adversarial and benign messages and the pre-filter false-positive corpus come from
+  `helpdesk/backend/tests/.../Fixtures/*.json` (which the C# tests run only against fakes); the rest are lane examples from the
+  router prompt and the hand-off and draft-confirmation flow (decline, amend, rule-breaking reply, change of subject).
+- **`needs-queue`.** `confirm-yes-queues-the-ticket` agrees to a draft, which publishes to the queue, so it needs Azurite
+  (`UseDevelopmentStorage=true`). Without one it ends in `errors.jsonl`, never as a 0. Exclude it with `--ids` or leave it.
+- **Fails fast and never scores an outage.** An unreachable API fails within seconds, and an HTTP error from the app is recorded as an
+  error, not a failed case. An app in offline mode (no model key) runs, but only tests a keyword stub: its failures say nothing
+  about the prompts.
+- **`validate` warnings.** Ignore "inputs still contain [placeholder] text" (the `[user]`/`[assistant]` markers in multi-turn
+  cases and the `[BEGIN UNTRUSTED ...]` text in the prompts match its pattern).
+- **Cost.** The harness meters nothing here, so cost shows as $0.000: the spend is the app's own model calls. A full run is about
+  40 turns, nine of them caught by the pre-filter before any model call. My estimate is under a dollar, but it is not measured.
+
+`pytest` covers all of this offline with a fake of the intake API (`tests/test_app_evals.py`): prompt export, a drift guard
+that fails when `Prompts.cs` changes without a re-export, the entrypoint, the case set, and the whole run through the harness.
+
 ## Output layout
 
 ```

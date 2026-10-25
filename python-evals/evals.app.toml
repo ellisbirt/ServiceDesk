@@ -1,0 +1,44 @@
+# promptevals configuration for the REAL service-desk app (classifier, lanes, hand-off), not a draft prompt.
+# Use it with:  promptevals --config evals.app.toml <command>
+# See "Evals for the running app" in README.md for how to start the app first.
+
+[paths]
+# Exported from helpdesk/.../Ai/Prompts.cs (python -m service_desk_evals.prompts_export). The app does not read this
+# file; it is here so each variant snapshots the real prompt text and a prompt change forces a new variant.
+system_prompt = "../evals/app-prompts.md"
+cases = "../evals/app-cases.json"
+rubric = "../evals/rubric.md"      # unused: only deterministic code checks grade these cases
+runs_dir = "runs"
+flow = "app"
+
+[target]
+# The system under test is the running intake API, reached by this entrypoint. Provider and model are placeholders:
+# the app chooses its own models (classifier on the Fast tier, answers by tier). Set SERVICE_DESK_EVAL_URL if the API
+# is not on http://localhost:5129.
+entrypoint = "service_desk_evals.target:respond"
+provider = "anthropic"
+model = "service-desk-app"
+
+[judge]
+# Unused with graders = ["code"], kept so the file loads.
+provider = "anthropic"
+model = "claude-sonnet-5-5"
+max_tokens = 8000
+effort = "medium"
+
+[generator]
+provider = "anthropic"
+model = "claude-opus-5-5"
+max_tokens = 32000
+effort = "high"
+
+[run]
+reps = 1
+concurrency = 4        # the app limits jobs per tenant and requests per user; every case uses its own user
+timeout_s = 600        # a case replays several turns, each a real model call
+max_attempts = 1       # the app already retries its own model calls; a retry here would repeat paid turns
+
+[grading]
+# Free, deterministic: each case asserts on the JSON summary the entrypoint returns (lane, whether a draft was shown,
+# whether a ticket was queued). No LLM judge is involved.
+graders = ["code"]

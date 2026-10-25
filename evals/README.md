@@ -11,6 +11,8 @@ intentionally independent of an application language or Claude SDK.
 - `cases.json` — representative conversations and the behaviors expected from
   the assistant. Keep cases focused and give each one a stable ID.
 - `rubric.md` — shared scoring criteria for reviewing model responses.
+- `app-cases.json` and `app-prompts.md` — cases and a generated snapshot of the prompts for the **running app** (classifier,
+  lanes, hand-off), used with `python-evals/evals.app.toml`. `app-prompts.md` is exported from the C# `Prompts.cs`; do not edit it.
 
 ## Eval workflow
 
