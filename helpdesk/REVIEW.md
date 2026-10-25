@@ -2,6 +2,8 @@
 
 Reviewed 2026-10-12. Scope: `backend/` (.NET 10) and `frontend/` (React 19), **as the intake component of a larger system**. This revision re-scopes the earlier review: findings are split into what this component must fix, what it must emit or enforce for the rest of the platform, and what belongs to other components.
 
+> **Update 2026-10-25.** This is a snapshot from 2026-10-12 and the counts below are from then. Since then: the code is under git (the parent `service-desk/` repo) but there is still no CI (finding 1); the access-request card is gone (finding 2); the event carries `schemaVersion` (finding 3); history reaches inference as well as the classifier (finding 13); and a ticket is now queued only after the user confirms a draft (see `docs/design-decisions.md` D2.6). Current test counts are 641 API, 43 library and 35 browser tests, and 193 frontend tests. Findings not mentioned here have not been re-checked.
+
 **Verified in this review:** backend 344 tests pass, frontend 55 tests pass, lint and typecheck clean, `dotnet list package --vulnerable` clean, `npm audit --omit=dev` clean (two moderate dev-only findings via `@tailwindcss/typography`). Not verified: a real browser against a running server (split upload, ticket connection), the prompts against the real model, and anything about the other components or the deployment.
 
 ## Role of this component (assumed from the code and README)
@@ -28,9 +30,9 @@ Status key: **Open**, **Done** (fixed and tested earlier, see README), **Depende
 
 | # | Finding | Severity | Scope | Status |
 |---|---|---|---|---|
-| 1 | No source control, CI or delivery pipeline | Blocker | Intake | Open |
-| 2 | Access-request card reports a request that was never made | Blocker | Intake UI, handoff to PIM | Open |
-| 3 | Handoff contract to downstream is undefined and under-specified | Blocker | Shared interface | Open |
+| 1 | No source control, CI or delivery pipeline | Blocker | Intake | Partial (git added; no CI) |
+| 2 | Access-request card reports a request that was never made | Blocker | Intake UI, handoff to PIM | Done (card removed) |
+| 3 | Handoff contract to downstream is undefined and under-specified | Blocker | Shared interface | Partial (`schemaVersion` added) |
 | 4 | No real-model evaluation of the production prompts in this project | High | Intake | Open |
 | 5 | Front door is a single instance with in-memory state | High | Intake | Open |
 | 6 | Pre-filter exemption can switch off a block | High | Intake | Done |
@@ -46,16 +48,18 @@ Status key: **Open**, **Done** (fixed and tested earlier, see README), **Depende
 
 ## Blockers
 
-### 1. No delivery pipeline and no source control (Open)
+### 1. No delivery pipeline and no source control (Partial: git added, no CI)
 No git repository, CI, container image, infrastructure as code, central package management (`Directory.Packages.props`), lock files, `TreatWarningsAsErrors`, analyzers beyond `CA2016`, or SBOM. `backend/.gitignore` lacks `.vs/`, `*.user` and `TestResults/`; `frontend/tsconfig.tsbuildinfo` should be ignored. Everything else in this review is unprotected until this exists. If the wider platform has a shared pipeline, adopt it rather than build one, but the repo still needs to be under source control first.
 **Next:** git, then a build and test gate with dependency and secret scanning. Run the model evaluation (finding 4) in the same pipeline.
 
-### 2. The access-request card reports a request that was never made (Open)
+### 2. The access-request card reports a request that was never made (Done: the card was removed)
+*Update:* `AccessRequestCard` no longer exists. After a policy refusal the UI offers a "Start an access request" button that sends an ordinary message and continues in the chat, ending in a confirmed ticket. The text below describes the state at review time.
 `AccessRequestCard.tsx:7-8` hard-codes a SharePoint target and two approvers, and on submit only sets local state and shows "Request recorded for approval by …" (line 26). The copy claims PIM integration. A blocked user can believe an approval is in flight.
 **Re-scoped:** PIM is downstream, so intake should not own the workflow, but it owns the promise it makes. Until the handoff exists, remove the card or show a plain instruction to use the real access process.
 **Next:** when wired, intake emits an access-request event through the contract in finding 3, with the target and approver choices supplied by the server (never hard-coded in the UI), and only confirms after the handoff is accepted.
 
-### 3. The handoff contract to downstream is undefined (Open, was a "smaller point")
+### 3. The handoff contract to downstream is undefined (Partial, was a "smaller point")
+*Update:* `ProcessPrivateCorpTicketEvent` now carries `SchemaVersion` (currently 1, additive changes keep it). The other points below have not been re-checked.
 This is now the main integration surface, so it moves up from Low. `ProcessPrivateCorpTicketEvent` is the only thing intake gives the rest of the system, and it has no stated guarantees.
 - **No schema version.** Downstream cannot evolve safely, and intake cannot change fields without breaking consumers.
 - **Delivery and idempotency undefined.** Duplicate detection is not confirmed on the queue (`MessageId` is the event id; Service Bus duplicate detection must be enabled and its window agreed). Storage Queue has none, and at-least-once delivery means duplicate tickets. Dead-letter handling and poison messages are the consumer's problem, but the contract must say so.
@@ -106,7 +110,7 @@ Intake trusts any validly signed token carrying a `tenant_id` claim. There is no
 **Next:** an opt-in live probe (queue send-permission check, Anthropic reachability with a cached result) feeding readiness and alerts, with SLOs and alert rules set in the telemetry backend.
 
 ### 13. Conversation context, persistence and record (Dependency, needs a decision)
-- **Follow-ups lose context:** history reaches only the classifier, not inference.
+- **Follow-ups lose context (resolved):** history now reaches inference and the interviewer as well as the classifier.
 - **A page refresh loses everything.** Plan: keep the transcript with its signatures in `sessionStorage`.
 - **No server-side record** for compliance, support or feedback. **Decision needed:** does intake own a write-only recorder (redacted, opt-in, with retention and deletion), or does the platform? The answer also decides whether downstream can fetch context for a ticket (finding 3).
 - **Signed history never expires.** There is no timestamp or TTL in the HMAC, so a genuine turn replays forever and revocation is key rotation only. Assistant text influenced by prompt injection is signed as genuine.

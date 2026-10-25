@@ -6,7 +6,7 @@ Browser tests for the helpdesk chat, written in C# with xUnit and [PuppeteerShar
 
 ```powershell
 cd helpdesk/backend
-dotnet test tests/Helpdesk.UiTests                      # all of them (about 40 seconds)
+dotnet test tests/Helpdesk.UiTests                      # all of them (about a minute)
 dotnet test tests/Helpdesk.UiTests --filter "FullyQualifiedName~AttachmentTests"
 dotnet test --filter "Category!=UI"                      # everything except the UI tests (the solution includes this project)
 ```
@@ -29,7 +29,7 @@ Infrastructure/
   HelpdeskApp.cs        The real API on a real Kestrel port (WebApplicationFactory plus a second, Kestrel host,
                         because a browser cannot reach the in-memory test server) serving the built front end.
   ScriptedServices.cs   Stand-ins: ScriptedRouter (keywords -> lane), ScriptedInference (streams a canned answer, records
-                        what it was asked, including attached files), ScriptedInterviewer (asks once, then raises),
+                        what it was asked, including attached files), ScriptedInterviewer (asks once, drafts the ticket, then raises it only when the draft is confirmed; a reply starting "No" declines),
                         RecordingPublisher (the ticket queue), plus an empty knowledge base and search.
   SpaBuild.cs           Builds and caches the front end.
   BrowserLocator.cs     Finds Chrome or Edge, else downloads Chromium.
@@ -42,8 +42,9 @@ Pages/
 Tests/
   ChatTests.cs          Opening, sending, streaming, Enter and Shift+Enter, follow-ups, new conversation, markdown and
                         script safety, out-of-scope, errors, live search.
-  HandOffTests.cs       Policy guidance, the access-request button, a ticket raised by conversation with no form, the
-                        separate summary and conversation summary.
+  HandOffTests.cs       Policy guidance, the access-request button, a ticket drafted by conversation with no form and
+                        queued only after the user confirms it (button or typed), declining a draft, the separate
+                        summary and conversation summary.
   AttachmentTests.cs    Choosing files, removing them, refused types, paste-a-log becomes an attachment, paste as text
                         instead, files reaching the model and the ticket.
 ```
@@ -51,7 +52,7 @@ Tests/
 ### The Page Object Model here
 
 - **Tests say what a person does and sees**, never selectors: `await Chat.AskAsync("My VPN is down.")`, `reply.Lane`, `Chat.Attachments.RemoveAsync("a.log")`.
-- **Selectors live in one place per page object.** Where the markup gave nothing stable to hold on to, the front end has `data-testid` attributes (`user-message`, `assistant-message` with `data-lane`, `lane-label`, `message-body`, `error-message`, `live-reply`, `stopped-reply`) and ARIA labels (`Message`, `Attach files`, `Send a message`, `Attachments to send`). Styling classes are never used as selectors, so a restyle cannot break a test. If you change those hooks, change the page object.
+- **Selectors live in one place per page object.** Where the markup gave nothing stable to hold on to, the front end has `data-testid` attributes (`user-message`, `assistant-message` with `data-lane`, `lane-label`, `message-body`, `error-message`, `live-reply`, `stopped-reply`) and ARIA labels (`Message`, `Attach files`, `Send a message`, `Attachments to send`, and the draft group `Send this to the service desk?`). Styling classes are never used as selectors, so a restyle cannot break a test. If you change those hooks, change the page object.
 - **Waiting is the page object's job.** Methods return when the screen is ready (`AskAsync` waits for the finished reply, `WaitForUploadedAsync` for the upload). Tests contain no sleeps.
 - A **component object** (`AttachmentTray`, `ChatMessage`) is used for a part of the screen with its own behaviour. Add one the same way for a new part.
 

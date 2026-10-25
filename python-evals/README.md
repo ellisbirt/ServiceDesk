@@ -63,7 +63,8 @@ promptevals report                    # summary.md + runs/<flow>/report.html
 - **Variants** must be named `baseline`, `v1`, `v2`, and so on. Each one
   snapshots the prompt that produced it, plus a `change.patch` showing the
   diff against baseline. If you edit the prompt and re-run an existing
-  variant, the runner refuses rather than mixing two prompts in one result set.
+  variant, the runner refuses rather than mixing two prompts in one result set
+  (`promptevals run --force` discards the old results and re-runs).
 - **Resume:** runs write each result as it finishes. Re-running a variant
   skips any (case, rep) pair that's already done, so a crash costs nothing.
 - **Cost gate:** `run`, `regrade`, `generate`, and `selftest --judge` print
@@ -97,6 +98,8 @@ promptevals generate --count happy-path=5 missing-info=3 adversarial=3 multi-tur
     --notes "Users are non-technical staff; hard cases mix two problems in one message"
 promptevals generate --mode variations --count edge-case=5   # perturb existing cases
 ```
+
+`generate` appends to an existing proposed file and skips ids already in it. With no `--count` it proposes 2 of each built-in category.
 
 Built-in categories: `happy-path`, `missing-info`, `out-of-scope`, `boundary`,
 `adversarial`, `edge-case`, `multi-turn`. You can also use your own category
@@ -152,6 +155,7 @@ Supported types: `contains`, `not_contains`, `regex`, `not_regex`, `equals`,
 `starts_with`, `max_words`, `min_words`, `max_chars`, `min_chars`,
 `max_sentences`, `json_valid`, `json_schema`, `no_markdown`, and `python`.
 A `python` check has the signature `fn(output: str, case: Case) -> bool | (bool, reason)`.
+`json_schema` needs the `jsonschema` package, which is in the `schema` extra (`pip install -e ".[schema]"`, also included in `[dev]`).
 
 ### Human grading and judge calibration
 
@@ -183,6 +187,8 @@ outputs without new samples.
 }
 ```
 
+Extra fields such as `why_hard` and `source` are kept with the case but not used for grading.
+
 For multi-turn cases, `input` can be a list of `{"role", "content"}` turns
 that ends with a user turn. `tags[0]` is the grouping used in reports.
 
@@ -206,7 +212,8 @@ runs/<flow>/_state.json                 metric declarations
 runs/<flow>/<variant>/results.jsonl     one row per (case, rep): output, grade, explanation, usage, model
 runs/<flow>/<variant>/errors.jsonl      timeouts, API failures, grader crashes (never scored as 0)
 runs/<flow>/<variant>/traces/*.json     full conversation per case
-runs/<flow>/<variant>/system-prompt.md  prompt snapshot (+ change.patch / change.md for v1+)
+runs/<flow>/<variant>/system-prompt.md  prompt snapshot (+ system-prompt.before.md, change.patch and change.md for v1+)
+runs/<flow>/<variant>/summary.json      the variant's metrics
 runs/<flow>/summary.md, report.html
 ```
 

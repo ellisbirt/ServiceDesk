@@ -91,7 +91,9 @@ With the intake running against the same Azurite (`npm run debug` in `../helpdes
 | `Cosmos:AllowInsecureEmulatorCertificate` | Accept the emulator's self-signed certificate. Never set it against a real account. |
 | `Blobs:Provider` | `InMemory` (default) or `Azure`. |
 | `Blobs:ConnectionString` or `Blobs:ServiceUri` (managed identity), `Blobs:Container` | Attachment storage. The default container is `ticket-attachments`. Blob paths are `{tenantId}/{ticketId}/{attachmentId}`. With managed identity, uploads and downloads use user-delegation SAS URLs. |
+| `Blobs:CreateContainerIfNotExists`, `Blobs:DevPublicBaseUrl` | Create the container on start (default true), and the base URL the in-memory dev store uses for upload and download links (default `http://localhost:5139`; `appsettings.Development.json` sets `http://localhost:5174`). |
 | `Attachments:MaxBytes`, `Attachments:MaxPerTicket`, `Attachments:SasLifetimeMinutes` | 25 MB, 50 per ticket, and 10-minute upload/download URLs by default. `MaxPerTicket` also caps the chat attachments imported from the intake. `Blobs:Container` must match the helpdesk (see "Attachments from the helpdesk chat"). |
+| `Attachments:AllowedContentTypes`, `Attachments:AllowedExtensions` | The type allowlists applied to uploads. See `AttachmentOptions` in `AttachmentService.cs` for the defaults. |
 | `Intake:Provider` | `None` (default), `StorageQueue` or `ServiceBus`. Match the intake's `Queue:Provider`. |
 | `Intake:QueueName`, `Intake:ConnectionString`, `Intake:QueueServiceUri`, `Intake:FullyQualifiedNamespace` | Queue settings. The default queue is `private-corp-tickets`. The URI and namespace forms use managed identity. |
 | `Intake:MaxDeliveries`, `Intake:PollIntervalSeconds`, `Intake:BatchSize`, `Intake:VisibilityTimeoutSeconds` | Poison handling and polling. A Storage Queue message that fails `MaxDeliveries` times (default 5) moves to `<queue>-poison`. Service Bus dead-letters it. |
@@ -104,6 +106,7 @@ With the intake running against the same Azurite (`npm run debug` in `../helpdes
 | `Dlp:*` | The same redaction rules as the intake (see `../helpdesk/README.md`). The `Model` destination applies to assist prompts. The `Embedding` destination applies to KB text before it is embedded. |
 | `Auth:UseDevAuth`, `Auth:Enforce`, `Auth:Authority`, `Auth:Audience`, `Auth:SpaClientId`, `Auth:ApiScope`, `Auth:Anonymous:*` | See "Authentication". |
 | `Cors:AllowedOrigins`, `RateLimit:AssistPerMinute`, `RateLimit:HubTicketPerMinute` | Browser origins, and per-user limits for AI assist (default 20/min) and hub connection tickets (default 30/min). |
+| `Hub:TicketSeconds`, `Hub:MaxTicketsPerUser`, `Hub:MaxTickets` | Single-use hub connection tickets (jwt mode): lifetime in seconds (default 30), unused tickets one user may hold (10), and in total (10,000). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `Serilog:*` | Observability. The same setup as the intake, plus the activity sources `AgentDesk.Intake`, `AgentDesk.Assist` and `Helpdesk.Llm`. |
 
 ### Production embedding setup (Azure OpenAI)
@@ -181,7 +184,7 @@ Intake dedupe records (with TTL) and the per-tenant number counters live in the 
 - Every published version is kept as a `kbVersion` snapshot.
 
 **Attachment** (`attachments` container)
-- File details: `ticketId`, `fileName`, `contentType`, `size`, `sha256`, `blobPath`.
+- File details: `ticketId`, `commentId`, `fileName`, `contentType`, `size`, `sha256`, `blobPath`, `uploadedBy`.
 - `status`: pending_upload, available, quarantined or rejected, plus `scanResult`.
 
 ## API overview (`/api/v1`)
@@ -192,12 +195,12 @@ Errors are RFC 9457 Problem Details. Every response carries `X-Correlation-Id`.
 |---|---|
 | Tickets | `GET /tickets` (filters: status, priority, assignee, unassigned, group, category, text, breached; sort; continuation token), `POST /tickets`, `GET/PATCH /tickets/{id}`, `POST /tickets/{id}/assign`, `POST /tickets/{id}/transition` |
 | Timeline | `GET /tickets/{id}/timeline`, `POST /tickets/{id}/comments` (`visibility`, `body`, `attachmentIds`, `citedKbArticleIds`) |
-| Attachments | `POST /tickets/{id}/attachments` returns a short-lived upload URL. The browser `PUT`s the file straight to Blob Storage, then calls `POST .../{attachmentId}/complete`, which checks the size and, if one was declared, the SHA-256. `GET .../{attachmentId}/download` returns a read URL. |
+| Attachments | `POST /tickets/{id}/attachments` returns a short-lived upload URL. The browser `PUT`s the file straight to Blob Storage, then calls `POST .../{attachmentId}/complete`, which checks the size and, if one was declared, the SHA-256. `GET /tickets/{id}/attachments` lists a ticket's attachments, and `GET .../{attachmentId}/download` returns a read URL. |
 | Knowledge base | `GET/POST /kb/articles`, `GET/PUT /kb/articles/{id}`, `GET /kb/articles/{id}/versions`, `POST /kb/articles/{id}/publish`, `/archive`, `/restore` and `/reembed` |
-| AI assist | `POST /tickets/{id}/assist/suggest-solutions`, `/draft-reply`, `/draft-kb`, `/reply-with-kb` and `/improve` |
+| AI assist | `GET /api/v1/assist` (describes the assist configuration), and `POST /tickets/{id}/assist/suggest-solutions`, `/draft-reply`, `/draft-kb`, `/reply-with-kb` and `/improve` |
 | Meta | `GET /meta/vocabulary` (statuses, priorities, categories), `GET /meta/config` (public auth settings for the SPA), `GET /me` |
-| Realtime | `POST /hub/ticket` (a single-use connection ticket), then the SignalR hub `/hubs/tickets`. Events: `ticketCreated`, `ticketUpdated`, `timelineEntryAdded`, `kbChanged`. |
-| Ops | `/healthz`, `/readyz`, `/status` (admin only: configuration checks for storage, blobs, intake and LLM roles) |
+| Realtime | `POST /hub/ticket` (jwt auth mode only: a single-use connection ticket; in dev or anonymous mode the route does not exist and the hub takes the `X-Dev-*` values as query parameters), then the SignalR hub `/hubs/tickets`. Events: `ticketCreated`, `ticketUpdated`, `timelineEntryAdded`, `kbChanged`. |
+| Ops | `/healthz`, `/readyz`, `/status` (admin only: the active auth mode, storage, blobs and intake providers, and the assist role) |
 
 ## Attachments from the helpdesk chat
 
@@ -270,7 +273,7 @@ The SPA includes an MSAL scaffold (`src/lib/auth.ts`). It turns on when the `VIT
 ## Tests
 
 ```powershell
-cd backend; dotnet test AgentDesk.slnx    # domain rules, services, API (WebApplicationFactory), intake consumer, embeddings, DLP
+cd backend; dotnet test AgentDesk.slnx    # domain rules, API (WebApplicationFactory), KB embeddings, intake attachment import
 cd frontend
 npm run lint; npm run typecheck
 npm test                                  # vitest + Testing Library + axe (API client, formatting, App flows)

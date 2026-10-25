@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `helpdesk/` is a multi-tenant AI triage service: a .NET 10 minimal API (`backend/`) plus a React 19 + Vite + Tailwind chat UI (`frontend/`). A message is classified by Claude into a lane (`POLICY_VIOLATION`, `PUBLIC_TECH`, `PUBLIC_SEARCH`, `PRIVATE_CORP`, `NO_MATCH`) and routed. `README.md` is the full reference for configuration keys and design notes; `REVIEW.md` is an enterprise/SaaS review (its test counts are stale). The lane prompts are C# constants in `Infrastructure/Ai/Prompts.cs`.
 
-Why things are the way they are is in `../docs/design-decisions.md` (hand-off, DLP, vendors, tiers, attachments). Not a git repo. Backend solution is `backend/Helpdesk.slnx`.
+Why things are the way they are is in `../docs/design-decisions.md` (hand-off, DLP, vendors, tiers, attachments). The git repository is the parent folder (`service-desk/`); there is no CI pipeline yet. Backend solution is `backend/Helpdesk.slnx`.
 
 ## Commands
 
@@ -42,12 +42,12 @@ Projects: `Shared` (contracts/events) → `Core` (interfaces, `Telemetry`) → `
 - *DLP:* `SensitiveDataRedactor` + `DlpPolicy` redact per destination (`Model`, `Search`, `Queue`) and optionally per tenant. Anything new that sends text off-service must go through it.
 - *Untrusted text:* user/search content is embedded via `PromptInput.Wrap` with per-value unpredictable boundary tokens; content is preserved verbatim and prompts treat it as data.
 - *Model tiers:* every `ChatRequest` carries a `ModelTier` (Fast, Standard, Deep) and `TierRoutingChatProvider` sends it to that tier's model within the one vendor (`LlmProviderOptions.ForTier`, vendor defaults in `LlmTierDefaults`). The classifier is Fast; the coach and interviewer are Standard; `InferenceRoutePolicy` (fixed, no config) picks the tier for answers from the classifier's complexity and the estimated input size. See README "Model tiers and routing".
-- *Rate limits (429):* `AnthropicClient` owns 429/`Retry-After` handling; the resilience handler is configured not to retry 429. Cancellation tokens are threaded through all calls (`CA2016` is a warning).
+- *Rate limits (429):* `RateLimitedSender` (in `Helpdesk.Llm`) owns 429/`Retry-After` handling; the resilience handler is configured not to retry 429. Cancellation tokens are threaded through all calls (`CA2016` is a warning).
 - *Message size:* hub messages are limited to 32 KB; the UI splits larger requests with `SendStreamed` (`frontend/src/lib/chatRequest.ts`), and `ChatRequestValidator.MaxPartBytes` bounds `Chat:MaxReceiveMessageBytes`.
 - *Config validation:* `Status/ConfigurationValidator` runs at startup (fails the app outside Development) and backs `GET /status`. New config keys with constraints belong there.
 - *Logs:* request logging records the path only (the hub URL carries a ticket); don't log query strings, tokens or message text.
 
-**Frontend:** `lib/auth.ts` (MSAL, redirects at most once per session, then a "session expired" banner), `lib/chatHub.ts` + `lib/hubTicket.ts` (WebSocket-only SignalR, falls back to REST), `components/` for the chat bubbles. The bubble shows a "Sent to the service desk" note when the reply's `metadata.ticketRaised` is `true`.
+**Frontend:** `lib/auth.ts` (MSAL, redirects at most once per session, then a "session expired" banner), `lib/chatHub.ts` + `lib/hubTicket.ts` (WebSocket-only SignalR, falls back to REST), `components/` for the chat bubbles. The bubble shows a "Sent to the service desk" note when the reply's `metadata.ticketRaised` is `true`, and "Send to the service desk" / "Don't send" buttons (latest message only) when `metadata.ticketPending` is `true`.
 
 ## Conventions
 
