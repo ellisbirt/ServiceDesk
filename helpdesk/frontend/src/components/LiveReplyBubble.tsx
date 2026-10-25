@@ -8,6 +8,7 @@ export interface LiveReplyBubbleProps {
   notice?: string;
   /** Seconds since the server started working, from its heartbeat. */
   elapsedSeconds?: number;
+  stopped?: boolean;
 }
 
 const SLOW_AFTER_SECONDS = 10;
@@ -25,8 +26,9 @@ export const LiveReplyBubble: FC<LiveReplyBubbleProps> = (props) => {
   // aria-live is off here: announcing every streamed fragment would be unusable. The finished bubble is announced.
   return (
     <div
-      aria-live="off"
-      aria-busy="true"
+      data-testid={props.stopped ? 'stopped-reply' : 'live-reply'}
+      aria-live={props.stopped ? 'polite' : 'off'}
+      aria-busy={!props.stopped}
       className="p-4 my-2 rounded-lg border bg-zinc-900/50 border-zinc-800"
     >
       {props.text && (

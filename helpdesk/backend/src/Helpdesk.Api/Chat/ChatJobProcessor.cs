@@ -204,7 +204,12 @@ public sealed class ChatJobProcessor(
         }
 
         await SendWithinLimitAsync(job, "failed", token => progress.SendAsync(
-            progress.Event(ChatEventTypes.Failed) with { Error = title, ErrorCode = code }, token));
+            progress.Event(ChatEventTypes.Failed) with
+            {
+                Error = title,
+                ErrorCode = code,
+                RetryAfterSeconds = cancelled ? null : ApiErrors.RetryAfterSeconds(ex)
+            }, token));
     }
 
     /// <summary>

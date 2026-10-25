@@ -40,9 +40,9 @@ public sealed class ExceptionStatusCodeHandler(
             context.Response.Clear();
             context.Response.StatusCode = status;
             context.Response.ContentType = "application/problem+json";
-            if (exception is UpstreamRateLimitedException { RetryAfter: { } retryAfter })
+            if (ApiErrors.RetryAfterSeconds(exception) is { } retryAfter)
             {
-                context.Response.Headers.RetryAfter = Math.Ceiling(retryAfter.TotalSeconds).ToString("0");
+                context.Response.Headers.RetryAfter = Math.Ceiling(retryAfter).ToString("0", System.Globalization.CultureInfo.InvariantCulture);
             }
 
             var problem = new ProblemDetails
