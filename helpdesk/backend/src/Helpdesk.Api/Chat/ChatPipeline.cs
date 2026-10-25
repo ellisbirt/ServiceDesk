@@ -5,6 +5,7 @@ using Helpdesk.Core;
 using Helpdesk.Core.Interfaces;
 using Helpdesk.Infrastructure.Ai;
 using Helpdesk.Infrastructure.Kb;
+using Helpdesk.Llm;
 using Helpdesk.Shared.Contracts;
 using Helpdesk.Shared.Events;
 using Microsoft.Extensions.Options;
@@ -29,6 +30,7 @@ public sealed class ChatPipeline(
     IKnowledgeBaseSearch knowledgeBase,
     IOptions<KbOptions> kbOptions,
     IOptions<ChatOptions> chatOptions,
+    IAttachmentService attachmentService,
     ILogger<ChatPipeline> logger)
 {
     public async Task<HelpdeskApiResponse> RunAsync(
@@ -42,7 +44,8 @@ public sealed class ChatPipeline(
         ReportDropped(verified, tenantId);
         var original = submitted with { ConversationHistory = verified.Messages };
 
-        var response = await RouteAsync(original, tenantId, userId, progress, ct, userAgent);
+        var attachments = await ResolveAttachmentsAsync(original, tenantId, userId, ct);
+        var response = await RouteAsync(original, attachments, tenantId, userId, progress, ct, userAgent);
 
         // Sign the finished turn so the client can send it back as trusted history next time.
         var (userSignature, assistantSignature) = signer.SignTurn(
@@ -61,15 +64,45 @@ public sealed class ChatPipeline(
             verified.Dropped, verified.Reason, tenantId);
     }
 
+    /// <summary>
+    /// The files this request refers to. A reference counts only if its token is genuine for this tenant, user and
+    /// conversation; the file's real details come from storage, never from the reference.
+    /// </summary>
+    private async Task<ResolvedAttachments> ResolveAttachmentsAsync(
+        ChatMessageRequest original, string tenantId, string userId, CancellationToken ct)
+    {
+        if (!attachmentService.Enabled) return ResolvedAttachments.None;
+
+        var submitted = original.Attachments ?? [];
+        var current = AttachmentTokens.ValidIds(signer, tenantId, userId, original.ConversationId, submitted);
+        if (current.Count < submitted.Select(r => r.Id).Distinct().Count())
+            logger.LogWarning("Ignored attachment reference(s) with an invalid token for Tenant: {TenantId}", tenantId);
+        if (current.Count > attachmentService.Limits.MaxFilesPerMessage)
+            throw new AttachmentException("too_many_files", $"A message can have at most {attachmentService.Limits.MaxFilesPerMessage} files.");
+
+        var earlier = AttachmentTokens.ValidIds(
+            signer, tenantId, userId, original.ConversationId, original.ConversationHistory.SelectMany(m => m.Attachments ?? []));
+        return await attachmentService.ResolveAsync(tenantId, userId, original.ConversationId, current, earlier, ct);
+    }
+
+    /// <summary>What the classifier is told about files, so "see the attached log" is read in context.</summary>
+    private static string ClassifierInput(string messageText, ResolvedAttachments attachments) =>
+        attachments.Current.Count == 0
+            ? messageText
+            : $"{messageText}\n\n[The user attached: {string.Join(", ", attachments.Current.Select(a => $"{Brief(a.FileName)} ({a.Kind})"))}]";
+
+    private static string Brief(string name) => new string(name.Where(c => !char.IsControl(c)).Take(60).ToArray());
+
     private async Task<HelpdeskApiResponse> RouteAsync(
-        ChatMessageRequest original, string tenantId, string userId, IChatProgress? progress, CancellationToken ct,
-        string? userAgent)
+        ChatMessageRequest original, ResolvedAttachments attachments, string tenantId, string userId, IChatProgress? progress,
+        CancellationToken ct, string? userAgent)
     {
         // Everything downstream (model, web search, ticket queue) only ever sees the redacted request.
         var request = Redact(original, tenantId);
 
-        var (lane, responseContext) = await guardrailService.ClassifyAndValidateAsync(
-            request.MessageText, tenantId, request.ConversationHistory, ct, progress, userAgent);
+        var classification = await guardrailService.ClassifyAndValidateAsync(
+            ClassifierInput(request.MessageText, attachments), tenantId, request.ConversationHistory, ct, progress, userAgent);
+        var (lane, responseContext) = classification;
         Telemetry.Classifications.Add(1, new KeyValuePair<string, object?>("lane", lane));
         Activity.Current?.SetTag("helpdesk.lane", lane);
 
@@ -91,9 +124,10 @@ public sealed class ChatPipeline(
 
             case ActionLanes.PublicTech:
                 kbHits = await RetrieveKnowledgeAsync(request, tenantId, ct);
+                var techTier = ChooseTier(lane, classification.Complexity, request, kbHits, searchContext: null, attachments.Model);
                 response = Reply(request, ActionLanes.PublicTech,
                     await inferenceService.ExecutePublicInferenceAsync(
-                        request.MessageText, ct, progress, userAgent, request.ConversationHistory, kbHits));
+                        request.MessageText, ct, progress, userAgent, request.ConversationHistory, kbHits, techTier, attachments.Model));
                 break;
 
             case ActionLanes.PublicSearch:
@@ -102,15 +136,17 @@ public sealed class ChatPipeline(
                 var searchMarkdown = await searchService.GetLiveSearchResultsAsync(searchText, ct);
                 // The KB is internal, so it sees the Model-redacted conversation, not the Search-sanitised copy.
                 kbHits = await RetrieveKnowledgeAsync(request, tenantId, ct);
+                var searchTier = ChooseTier(lane, classification.Complexity, request, kbHits, searchMarkdown, attachments.Model);
                 response = Reply(request, ActionLanes.PublicSearch,
-                    await inferenceService.ExecuteSearchInferenceAsync(searchText, searchMarkdown, ct, progress, userAgent, kbHits));
+                    await inferenceService.ExecuteSearchInferenceAsync(
+                        searchText, searchMarkdown, ct, progress, userAgent, kbHits, searchTier, attachments.Model));
                 break;
 
             case ActionLanes.PrivateCorp:
                 // The model leads the hand-off: it asks for whatever is missing, and raises the ticket itself once
                 // it has enough. Nothing is queued before it decides.
                 kbHits = await RetrieveKnowledgeAsync(request, tenantId, ct);
-                response = await HandOffAsync(original, request, tenantId, userId, ct, userAgent, kbHits);
+                response = await HandOffAsync(original, request, attachments, tenantId, userId, ct, userAgent, kbHits);
                 break;
 
             default:
@@ -130,6 +166,33 @@ public sealed class ChatPipeline(
 
         if (kbHits.Count > 0) response.Metadata[KnowledgeBaseMetadataKey] = string.Join(",", kbHits.Select(h => h.Number));
         return response;
+    }
+
+    /// <summary>
+    /// Picks the model tier for an answer from the question's size and the classifier's complexity rating, and records it.
+    /// The size counts everything the model will read: the message, the history, KB articles and search results.
+    /// </summary>
+    private ModelTier ChooseTier(
+        string lane, RequestComplexity complexity, ChatMessageRequest request, IReadOnlyList<KbHit> kbHits, string? searchContext,
+        AttachmentContext files)
+    {
+        var tokens = files.EstimatedTokens + InferenceRoutePolicy.EstimateTokens(
+            request.ConversationHistory.Select(m => m.Content)
+                .Append(request.MessageText)
+                .Concat(kbHits.Select(h => h.Title + h.Excerpt))
+                .Append(searchContext));
+        var userTurns = request.ConversationHistory.Count(m => m.Role == "user") + 1;
+        var decision = InferenceRoutePolicy.Choose(new InferenceRouteContext(lane, complexity, tokens, userTurns));
+
+        Telemetry.InferenceRoutes.Add(1,
+            new KeyValuePair<string, object?>("lane", lane),
+            new KeyValuePair<string, object?>("tier", decision.Tier.ToString()),
+            new KeyValuePair<string, object?>("reason", decision.Reason));
+        Activity.Current?.SetTag("helpdesk.inference.tier", decision.Tier.ToString());
+        logger.LogInformation(
+            "Routed a {Lane} question to the {Tier} tier ({Reason}; about {Tokens} input tokens, {Turns} user turn(s))",
+            lane, decision.Tier, decision.Reason, tokens, userTurns);
+        return decision.Tier;
     }
 
     /// <summary>Response metadata key listing the numbers of the KB articles the reply was given, comma separated.</summary>
@@ -155,18 +218,39 @@ public sealed class ChatPipeline(
     /// <summary>Response metadata key holding the queued ticket event's id, set when a ticket was raised.</summary>
     public const string TicketEventIdMetadataKey = "ticketEventId";
 
+    /// <summary>Response metadata key set to "true" on a reply that shows a ticket draft and waits for the user to confirm it.</summary>
+    public const string TicketPendingMetadataKey = "ticketPending";
+
+    /// <summary>
+    /// Whether the user is answering a ticket draft. The server keeps no state, so this reads the history: the last
+    /// message must be an assistant message that ends with the confirmation prompt. Only verified (signed) history gets
+    /// here, so the user cannot fake it, and a draft the user has moved on from (a later turn followed it) no longer counts.
+    /// </summary>
+    internal static bool IsProposalPending(IReadOnlyList<ChatHistoryMessage> verifiedHistory) =>
+        verifiedHistory is [.., { Role: "assistant" } last] && last.Content.TrimEnd().EndsWith(Prompts.TicketConfirmPrompt, StringComparison.Ordinal);
+
     private async Task<HelpdeskApiResponse> HandOffAsync(
-        ChatMessageRequest original, ChatMessageRequest request, string tenantId, string userId, CancellationToken ct,
-        string? userAgent, IReadOnlyList<KbHit> kbHits)
+        ChatMessageRequest original, ChatMessageRequest request, ResolvedAttachments attachments, string tenantId, string userId,
+        CancellationToken ct, string? userAgent, IReadOnlyList<KbHit> kbHits)
     {
         // The model decides when it has enough; this only stops an interview that never ends.
         var userTurns = request.ConversationHistory.Count(m => m.Role == "user") + 1;
         var mustRaise = userTurns >= chatOptions.Value.MaxInterviewTurns;
-        var interview = await ticketInterviewer.InterviewAsync(Transcript(request), ct, userAgent, mustRaise);
-        if (mustRaise && !interview.RaiseTicket)
+        // The interviewer reads every attached file as a short excerpt: enough to make the ticket specific without paying for
+        // the whole file on every turn. (Every file counts as "earlier" here, so none is sent natively.)
+        var excerpts = attachments.All.Count == 0
+            ? AttachmentContext.Empty
+            : (await attachmentService.ResolveAsync(
+                tenantId, userId, original.ConversationId, [], [.. attachments.All.Select(a => a.Id)], ct)).Model;
+        var conversation = Transcript(request, attachments.All) + (excerpts.IsEmpty ? "" : "\n\nAttached files:\n" + excerpts.Text);
+        // A draft is waiting for the user's answer, so this turn confirms, amends or drops it. It is not the turn to cut
+        // the interview short.
+        var proposalPending = IsProposalPending(original.ConversationHistory);
+        var interview = await ticketInterviewer.InterviewAsync(conversation, ct, userAgent, mustRaise && !proposalPending, proposalPending);
+        if (mustRaise && !proposalPending && !interview.RaiseTicket)
         {
             logger.LogWarning(
-                "The interviewer kept asking after {Turns} user messages; raising a minimal ticket for Tenant: {TenantId}",
+                "The interviewer kept asking after {Turns} user messages; proposing a minimal ticket for Tenant: {TenantId}",
                 userTurns, tenantId);
             interview = MinimalTicket(request);
         }
@@ -174,6 +258,16 @@ public sealed class ChatPipeline(
         {
             logger.LogInformation("Gathering details for a service-desk ticket for Tenant: {TenantId}", tenantId);
             return Reply(request, ActionLanes.PrivateCorp, interview.Message + KnowledgeBaseReply.Articles(kbHits));
+        }
+
+        // The one gate before anything is queued: the user was shown a draft and has agreed to it. The model's own say-so
+        // is not enough, and neither is a "confirmed" flag on a turn that did not follow a draft.
+        if (!(proposalPending && interview.UserConfirmed))
+        {
+            logger.LogInformation("Proposed a service-desk ticket for confirmation for Tenant: {TenantId}", tenantId);
+            var proposal = Reply(request, ActionLanes.PrivateCorp, ProposalText(interview, attachments.All));
+            proposal.Metadata[TicketPendingMetadataKey] = "true";
+            return proposal;
         }
 
         string Clean(string text) => Sanitize(text, EgressDestination.Queue, tenantId);
@@ -189,6 +283,14 @@ public sealed class ChatPipeline(
             answers.Add(new TicketDetailAnswer { Label = "Recommended action", Value = Clean(action) });
         if (interview.StepsTried is { } tried)
             answers.Add(new TicketDetailAnswer { Label = "Steps already tried", Value = Clean(tried) });
+        if (attachments.All.Count > 0)
+        {
+            answers.Add(new TicketDetailAnswer
+            {
+                Label = "Attachments",
+                Value = Clean(string.Join("\n", attachments.All.Select(a => $"{a.FileName} ({a.Kind}, {a.Size} bytes)")))
+            });
+        }
         var details = new TicketDetails { Title = Clean(interview.Title!), Answers = answers };
 
         var ticketEvent = new ProcessPrivateCorpTicketEvent
@@ -205,15 +307,51 @@ public sealed class ChatPipeline(
             Subject = TicketSubject.FromText(details.Title),
             Summary = summary,
             ConversationSummary = conversationSummary,
-            Details = details
+            Details = details,
+            // The files already sit in the container shared with the ticket worker, which records them against the ticket.
+            Attachments = attachments.All.Count == 0 ? null : [.. attachments.All.Select(a => new TicketAttachment
+            {
+                Id = a.Id,
+                FileName = a.FileName,
+                ContentType = a.ContentType,
+                Size = a.Size,
+                Sha256 = a.Sha256,
+                BlobPath = a.BlobPath,
+                ScanStatus = a.ScanStatus
+            })]
         };
         await queuePublisher.PublishAsync(ticketEvent, ct);
+        // Marked only after the ticket is queued, so a failed publish leaves the files to expire normally.
+        await attachmentService.MarkRaisedAsync(
+            tenantId, original.ConversationId, [.. attachments.All.Select(a => a.Id)], ticketEvent.EventId, ct);
         logger.LogInformation("Service-desk ticket queued after conversation for Tenant: {TenantId}", tenantId);
 
         var reply = Reply(request, ActionLanes.PrivateCorp, interview.Message + KnowledgeBaseReply.Articles(kbHits));
         reply.Metadata[TicketRaisedMetadataKey] = "true";
         reply.Metadata[TicketEventIdMetadataKey] = ticketEvent.EventId.ToString();
         return reply;
+    }
+
+    /// <summary>
+    /// What the user is asked to approve: the model's lead-in and everything that goes to the operator (summary, conversation
+    /// summary, suggested action, steps tried, files), then the confirmation prompt. The whole text is kept inside the history
+    /// message limit, which is what the client sends it back under. The confirmation prompt is always last:
+    /// <see cref="IsProposalPending"/> finds the draft by it.
+    /// </summary>
+    private static string ProposalText(TicketInterview draft, IReadOnlyList<AttachmentInfo> files)
+    {
+        static string Clip(string text, int max) => text.Length <= max ? text : text[..(max - 1)] + "…";
+
+        var leadIn = Clip(draft.Message, 400);
+        var details = new List<string> { $"**{Clip(draft.Title!, 120)}**", Clip(draft.Summary!, 1100) };
+        if (draft.ConversationSummary is { } history) details.Add($"The conversation so far:\n{Clip(history, 1000)}");
+        if (draft.RecommendedAction is { } action) details.Add($"Suggested action: {Clip(action, 500)}");
+        if (draft.StepsTried is { } tried) details.Add($"Already tried: {Clip(tried, 300)}");
+        if (files.Count > 0) details.Add("Attached: " + string.Join(", ", files.Select(f => Brief(f.FileName))));
+
+        var quoted = string.Join("\n", string.Join("\n\n", details).Split('\n').Select(line => ("> " + line).TrimEnd()));
+        var room = ChatRequestValidator.MaxMessageLength - leadIn.Length - Prompts.TicketConfirmPrompt.Length - 8;
+        return $"{leadIn}\n\n{Clip(quoted, room)}\n\n{Prompts.TicketConfirmPrompt}";
     }
 
     private const int MaxTranscriptMessages = 12;
@@ -228,15 +366,24 @@ public sealed class ChatPipeline(
             .Append(request.MessageText).ToList();
         static string Brief(string text) => text.Length <= 300 ? text : text[..300] + "…";
         return new TicketInterview(
-            true, Prompts.TicketRaisedWithoutInterview, TicketSubject.FromText(userMessages[0]),
+            true, Prompts.TicketProposedWithoutInterview, TicketSubject.FromText(userMessages[0]),
             "The user needs help from the service desk. The assistant could not complete its questions, so details may be missing.",
             string.Join("\n", userMessages.TakeLast(MaxTranscriptMessages).Select(m => $"- {Brief(m)}")), null, null);
     }
 
-    private static string Transcript(ChatMessageRequest request) =>
-        string.Join("\n", request.ConversationHistory.TakeLast(MaxTranscriptMessages)
-            .Select(m => $"{m.Role}: {m.Content}")
-            .Append($"user: {request.MessageText}"));
+    private static string Transcript(ChatMessageRequest request, IReadOnlyList<AttachmentInfo> files)
+    {
+        // Names come from storage, not from the references the client sent.
+        string Attached(IReadOnlyList<AttachmentRef>? refs) =>
+            refs is not { Count: > 0 }
+                ? ""
+                : " [attached: " + string.Join(", ", refs.Select(r => files.FirstOrDefault(f => f.Id == r.Id)).Where(f => f is not null)
+                    .Select(f => Brief(f!.FileName))) + "]";
+
+        return string.Join("\n", request.ConversationHistory.TakeLast(MaxTranscriptMessages)
+            .Select(m => $"{m.Role}: {m.Content}{Attached(m.Attachments)}")
+            .Append($"user: {request.MessageText}{Attached(request.Attachments)}"));
+    }
 
     private static Guid EventIdFor(string tenantId, string userId, Guid conversationId, int historyCount)
     {

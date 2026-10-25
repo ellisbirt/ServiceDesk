@@ -31,7 +31,7 @@ public sealed partial class OfflineGuardrailRouterService(ILogger<OfflineGuardra
         string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null) =>
         Task.FromResult(Prompts.ComplianceFallback);
 
-    public Task<(string Lane, string ResponseContext)> ClassifyAndValidateAsync(
+    public Task<Classification> ClassifyAndValidateAsync(
         string userInput, string tenantId, IReadOnlyList<ChatHistoryMessage>? conversationHistory = null,
         CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null)
     {
@@ -41,36 +41,36 @@ public sealed partial class OfflineGuardrailRouterService(ILogger<OfflineGuardra
         {
             if (GuardrailPolicyPrefilter.FindPolicyRule(userInput) is not null)
             {
-                return Task.FromResult((ActionLanes.PolicyViolation, Prompts.ComplianceFallback));
+                return Task.FromResult(new Classification(ActionLanes.PolicyViolation, Prompts.ComplianceFallback));
             }
             if (PrivateRegex().IsMatch(userInput))
             {
-                return Task.FromResult((ActionLanes.PrivateCorp, string.Empty));
+                return Task.FromResult(new Classification(ActionLanes.PrivateCorp, string.Empty));
             }
             if (ExplicitHandoffRequestRegex().IsMatch(userInput))
             {
-                return Task.FromResult((ActionLanes.PrivateCorp, string.Empty));
+                return Task.FromResult(new Classification(ActionLanes.PrivateCorp, string.Empty));
             }
             if (TechnicalFollowUpRegex().IsMatch(userInput)
                 && conversationHistory?.Any(message =>
                     message.Role == "user" && PublicTechRegex().IsMatch(message.Content)) == true)
             {
-                return Task.FromResult((ActionLanes.PublicTech, string.Empty));
+                return Task.FromResult(new Classification(ActionLanes.PublicTech, string.Empty));
             }
             if (SearchRegex().IsMatch(userInput))
             {
-                return Task.FromResult((ActionLanes.PublicSearch, string.Empty));
+                return Task.FromResult(new Classification(ActionLanes.PublicSearch, string.Empty));
             }
             if (PublicTechRegex().IsMatch(userInput))
             {
-                return Task.FromResult((ActionLanes.PublicTech, string.Empty));
+                return Task.FromResult(new Classification(ActionLanes.PublicTech, string.Empty));
             }
-            return Task.FromResult((ActionLanes.NoMatch, string.Empty));
+            return Task.FromResult(new Classification(ActionLanes.NoMatch, string.Empty));
         }
         catch (RegexMatchTimeoutException)
         {
             logger.LogWarning("Offline guardrail regex timed out; failing closed as a policy violation.");
-            return Task.FromResult((ActionLanes.PolicyViolation, Prompts.ComplianceFallback));
+            return Task.FromResult(new Classification(ActionLanes.PolicyViolation, Prompts.ComplianceFallback));
         }
     }
 }
@@ -89,13 +89,15 @@ public sealed class OfflinePublicInferenceService : IPublicInferenceService
 {
     public Task<string> ExecutePublicInferenceAsync(
         string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null,
-        IReadOnlyList<ChatHistoryMessage>? conversationHistory = null, IReadOnlyList<KbHit>? knowledgeBase = null) =>
+        IReadOnlyList<ChatHistoryMessage>? conversationHistory = null, IReadOnlyList<KbHit>? knowledgeBase = null,
+        Helpdesk.Llm.ModelTier tier = Helpdesk.Llm.ModelTier.Standard, AttachmentContext? attachments = null) =>
         ReplyAsync("_Offline mode: no Anthropic API key is configured, so this is a canned reply._\n\nSet `Anthropic:ApiKey` to get real answers."
             + KnowledgeBaseReply.Articles(knowledgeBase), progress, cancellationToken);
 
     public Task<string> ExecuteSearchInferenceAsync(
         string userInput, string searchContextMarkdown, CancellationToken cancellationToken = default,
-        IChatProgress? progress = null, string? userAgent = null, IReadOnlyList<KbHit>? knowledgeBase = null) =>
+        IChatProgress? progress = null, string? userAgent = null, IReadOnlyList<KbHit>? knowledgeBase = null,
+        Helpdesk.Llm.ModelTier tier = Helpdesk.Llm.ModelTier.Standard, AttachmentContext? attachments = null) =>
         ReplyAsync($"_Offline mode: canned reply. Search context that would have been used:_\n\n{searchContextMarkdown}"
             + KnowledgeBaseReply.Articles(knowledgeBase), progress, cancellationToken);
 
@@ -107,24 +109,51 @@ public sealed class OfflinePublicInferenceService : IPublicInferenceService
 }
 
 /// <summary>
-/// Offline stand-in: asks one question, then raises the ticket on the next user message. Real behaviour needs a model.
+/// Offline stand-in: asks one question, drafts the ticket on the next user message, and queues nothing until the user
+/// answers the draft with a yes. Real behaviour needs a model.
 /// </summary>
-public sealed class OfflineTicketInterviewer : ITicketInterviewer
+public sealed partial class OfflineTicketInterviewer : ITicketInterviewer
 {
-    public Task<TicketInterview> InterviewAsync(string conversation, CancellationToken cancellationToken = default, string? userAgent = null, bool mustRaise = false)
+    [GeneratedRegex(@"^\s*(yes|y|yep|yeah|ok|okay|sure|send( it)?|confirm|go ahead)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex Agreement();
+
+    [GeneratedRegex(@"^\s*(no|nope|cancel|don't|do not|stop)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex Refusal();
+
+    public Task<TicketInterview> InterviewAsync(
+        string conversation, CancellationToken cancellationToken = default, string? userAgent = null, bool mustRaise = false,
+        bool proposalPending = false)
     {
         var userMessages = conversation.Split('\n')
             .Where(l => l.StartsWith("user:", StringComparison.Ordinal))
             .Select(l => l["user:".Length..].Trim())
             .ToList();
+
+        if (proposalPending)
+        {
+            var answer = userMessages[^1];
+            userMessages.RemoveAt(userMessages.Count - 1);
+            if (Refusal().IsMatch(answer))
+            {
+                return Task.FromResult(new TicketInterview(
+                    false, "_Offline mode._ Okay, I haven't sent anything.", null, null, null, null, null));
+            }
+            var agreed = Agreement().IsMatch(answer);
+            if (!agreed) userMessages.Add(answer);
+            return Task.FromResult(Draft(agreed ? "_Offline mode._ I've passed this to the service desk." : "_Offline mode._ I've updated it.",
+                userMessages, agreed));
+        }
+
         if (userMessages.Count < 2 && !mustRaise)
         {
             return Task.FromResult(new TicketInterview(
                 false, "_Offline mode._ Could you tell me a little more about what you need and when it started?", null, null, null, null, null));
         }
 
-        return Task.FromResult(new TicketInterview(
-            true, "_Offline mode._ I've passed this to the service desk.", TicketSubject.FromText(userMessages[0]),
-            userMessages[^1], string.Join("\n", userMessages.Select(m => $"- {m}")), null, null));
+        return Task.FromResult(Draft("_Offline mode._ Here's what I'd send.", userMessages, userConfirmed: false));
     }
+
+    private static TicketInterview Draft(string message, List<string> userMessages, bool userConfirmed) => new(
+        true, message, TicketSubject.FromText(userMessages[0]), userMessages[^1],
+        string.Join("\n", userMessages.Select(m => $"- {m}")), null, null, userConfirmed);
 }

@@ -96,6 +96,30 @@ internal sealed class HubClient : IAsyncDisposable
             ConversationId = conversationId ?? Guid.NewGuid()
         });
 
+    /// <summary>
+    /// Sends <paramref name="text"/>, waits for the ticket draft, then sends "yes" with the draft in the signed history, as the
+    /// UI does. Returns the events of the second turn.
+    /// </summary>
+    public async Task<List<ChatStreamEvent>> SendAndConfirmAsync(string text, Guid? conversationId = null)
+    {
+        var id = conversationId ?? Guid.NewGuid();
+        var firstAck = await SendAsync(text, id);
+        Assert.NotNull(firstAck.RequestId);
+        var draft = (await UntilTerminalAsync())[^1].Response!;
+
+        var history = new[]
+        {
+            new ChatHistoryMessage { Role = "user", Content = text, Signature = draft.UserSignature },
+            new ChatHistoryMessage { Role = "assistant", Content = draft.ResponseText, Signature = draft.AssistantSignature }
+        };
+        var ack = await Connection.InvokeAsync<ChatAck>("Send", new ChatMessageRequest
+        {
+            MessageText = "Yes, send it.", ConversationId = id, ConversationHistory = history
+        });
+        Assert.NotNull(ack.RequestId);
+        return await UntilTerminalAsync();
+    }
+
     /// <summary>Uploads the request as a stream of parts: the message first, then one history message per part.</summary>
     public async Task<ChatAck> SendStreamedAsync(
         string text, IReadOnlyList<ChatHistoryMessage> history, Guid? conversationId = null, int extraParts = 0)
@@ -365,8 +389,7 @@ public class ChatHubTests
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
         await using var client = await HubClient.ConnectAsync(f, tenant: "tenant-z", user: "alice");
 
-        await client.SendAsync("vpn is down");
-        var events = await client.UntilTerminalAsync();
+        var events = await client.SendAndConfirmAsync("vpn is down");
 
         Assert.Equal(ChatEventTypes.Completed, events[^1].Type);
         var evt = Assert.Single(f.Publisher.Sent);

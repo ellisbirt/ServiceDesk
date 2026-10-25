@@ -17,9 +17,24 @@ public interface IGuardrailRouterService : IGuardrailCoach
     /// Conversation history is untrusted context. Throws <see cref="GuardrailClassificationException"/>
     /// when no safe classification can be made (fail closed).
     /// </summary>
-    Task<(string Lane, string ResponseContext)> ClassifyAndValidateAsync(
+    Task<Classification> ClassifyAndValidateAsync(
         string userInput, string tenantId, IReadOnlyList<ChatHistoryMessage>? conversationHistory = null,
         CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null);
+}
+
+/// <summary>How hard a request is to resolve, as rated by the classifier. Only used to pick a model tier.</summary>
+public enum RequestComplexity { Simple, Standard, Complex }
+
+/// <param name="Lane">The action lane.</param>
+/// <param name="ResponseContext">For POLICY_VIOLATION, the educational remediation text.</param>
+/// <param name="Complexity">How hard the request is to resolve; <see cref="RequestComplexity.Standard"/> when unknown.</param>
+public sealed record Classification(string Lane, string ResponseContext, RequestComplexity Complexity = RequestComplexity.Standard)
+{
+    public void Deconstruct(out string lane, out string responseContext)
+    {
+        lane = Lane;
+        responseContext = ResponseContext;
+    }
 }
 
 public interface IGuardrailCoach
@@ -36,12 +51,15 @@ public interface IPublicInferenceService
 {
     /// <param name="progress">When supplied, the reply is streamed to it as it is generated.</param>
     /// <param name="knowledgeBase">Retrieved KB articles to ground the answer in, or null when none matched.</param>
+    /// <param name="tier">Which of the vendor's models answers; see <see cref="InferenceRoutePolicy"/>.</param>
     Task<string> ExecutePublicInferenceAsync(
         string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null,
-        IReadOnlyList<ChatHistoryMessage>? conversationHistory = null, IReadOnlyList<KbHit>? knowledgeBase = null);
+        IReadOnlyList<ChatHistoryMessage>? conversationHistory = null, IReadOnlyList<KbHit>? knowledgeBase = null,
+        Helpdesk.Llm.ModelTier tier = Helpdesk.Llm.ModelTier.Standard, AttachmentContext? attachments = null);
     Task<string> ExecuteSearchInferenceAsync(
         string userInput, string searchContextMarkdown, CancellationToken cancellationToken = default,
-        IChatProgress? progress = null, string? userAgent = null, IReadOnlyList<KbHit>? knowledgeBase = null);
+        IChatProgress? progress = null, string? userAgent = null, IReadOnlyList<KbHit>? knowledgeBase = null,
+        Helpdesk.Llm.ModelTier tier = Helpdesk.Llm.ModelTier.Standard, AttachmentContext? attachments = null);
 }
 
 /// <summary>One knowledge-base article retrieved for a question.</summary>
@@ -79,16 +97,25 @@ public interface IKnowledgeBaseSearch
 /// <param name="ConversationSummary">A short chronological summary of the conversation for the operator: what was asked, what was suggested and what happened. Separate from <paramref name="Summary"/>.</param>
 /// <param name="RecommendedAction">What the service desk should do, such as grant the user access instead of resetting a password.</param>
 /// <param name="StepsTried">Troubleshooting already attempted, if any.</param>
+/// <param name="UserConfirmed">
+/// Only meaningful when a proposal was pending: the user's latest message approves it as shown. The pipeline ignores it
+/// otherwise, and never queues a ticket without it.
+/// </param>
 public sealed record TicketInterview(
     bool RaiseTicket, string Message, string? Title, string? Summary, string? ConversationSummary, string? RecommendedAction,
-    string? StepsTried);
+    string? StepsTried, bool UserConfirmed = false);
 
 public interface ITicketInterviewer
 {
     /// <param name="conversation">The redacted conversation so far, ending with the user's latest message.</param>
     /// <param name="mustRaise">The interview has run its course: the model must raise the ticket now rather than ask more.</param>
+    /// <param name="proposalPending">
+    /// The last assistant message showed the user a ticket draft and asked them to confirm it, so the latest user message is
+    /// their answer: confirm, change something, or decline.
+    /// </param>
     Task<TicketInterview> InterviewAsync(
-        string conversation, CancellationToken cancellationToken = default, string? userAgent = null, bool mustRaise = false);
+        string conversation, CancellationToken cancellationToken = default, string? userAgent = null, bool mustRaise = false,
+        bool proposalPending = false);
 }
 
 public sealed class TicketInterviewException(string message, Exception? inner = null) : Exception(message, inner);

@@ -19,6 +19,7 @@ public sealed class AnthropicTicketInterviewer(IChatProvider client, IOptions<An
         ["properties"] = new JsonObject
         {
             ["raiseTicket"] = new JsonObject { ["type"] = "boolean" },
+            ["userConfirmed"] = new JsonObject { ["type"] = "boolean" },
             ["message"] = new JsonObject { ["type"] = "string" },
             ["title"] = new JsonObject { ["type"] = "string" },
             ["summary"] = new JsonObject { ["type"] = "string" },
@@ -26,18 +27,22 @@ public sealed class AnthropicTicketInterviewer(IChatProvider client, IOptions<An
             ["recommendedAction"] = new JsonObject { ["type"] = "string" },
             ["stepsTried"] = new JsonObject { ["type"] = "string" }
         },
-        ["required"] = new JsonArray("raiseTicket", "message", "title", "summary", "conversationSummary", "recommendedAction", "stepsTried"),
+        ["required"] = new JsonArray("raiseTicket", "userConfirmed", "message", "title", "summary", "conversationSummary", "recommendedAction", "stepsTried"),
         ["additionalProperties"] = false
     };
 
     public async Task<TicketInterview> InterviewAsync(
-        string conversation, CancellationToken cancellationToken = default, string? userAgent = null, bool mustRaise = false)
+        string conversation, CancellationToken cancellationToken = default, string? userAgent = null, bool mustRaise = false,
+        bool proposalPending = false)
     {
+        var system = Prompts.TicketInterviewer;
+        if (proposalPending) system += "\n" + Prompts.TicketInterviewerConfirmTurn;
+        if (mustRaise) system += "\n" + Prompts.TicketInterviewerFinalTurn;
         try
         {
             var raw = await client.CompleteAsync(
                 new ChatRequest(
-                    mustRaise ? Prompts.TicketInterviewer + "\n" + Prompts.TicketInterviewerFinalTurn : Prompts.TicketInterviewer,
+                    system,
                     PromptInput.WithUserAgent(PromptInput.Wrap("conversation", conversation), userAgent),
                     _options.CoachTemperature, _options.InferenceMaxTokens, ResponseSchema: Schema),
                 cancellationToken: cancellationToken);
@@ -55,12 +60,15 @@ public sealed class AnthropicTicketInterviewer(IChatProvider client, IOptions<An
         {
             using var document = JsonDocument.Parse(raw);
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != 7)
-                throw new JsonException("Interview output must contain exactly seven properties.");
+            if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != 8)
+                throw new JsonException("Interview output must contain exactly eight properties.");
 
             var raise = root.GetProperty("raiseTicket");
             if (raise.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 throw new JsonException("raiseTicket must be a boolean.");
+            var confirmed = root.GetProperty("userConfirmed");
+            if (confirmed.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new JsonException("userConfirmed must be a boolean.");
 
             var message = Text(root, "message", 2000);
             if (message.Length == 0) throw new JsonException("message is required.");
@@ -72,7 +80,8 @@ public sealed class AnthropicTicketInterviewer(IChatProvider client, IOptions<An
             if (title.Length == 0 || summary.Length == 0) throw new JsonException("A ticket needs a title and summary.");
 
             return new TicketInterview(true, message, title, summary, NullIfBlank(Text(root, "conversationSummary", 4000)),
-                NullIfBlank(Text(root, "recommendedAction", 2000)), NullIfBlank(Text(root, "stepsTried", 2000)));
+                NullIfBlank(Text(root, "recommendedAction", 2000)), NullIfBlank(Text(root, "stepsTried", 2000)),
+                confirmed.GetBoolean());
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {

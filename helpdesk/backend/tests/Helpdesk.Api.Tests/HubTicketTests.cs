@@ -267,10 +267,8 @@ public class HubTicketFlowTests
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
         await using var client = await HubClient.ConnectWithTicketAsync(f, ApiFactory.Jwt(tenant: "tenant-z", user: "alice"));
 
-        var ack = await client.SendAsync("VPN is down");
-        var events = await client.UntilTerminalAsync();
+        var events = await client.SendAndConfirmAsync("VPN is down");
 
-        Assert.NotNull(ack.RequestId);
         Assert.Equal(ChatEventTypes.Completed, events[^1].Type);
         var evt = Assert.Single(f.Publisher.Sent);
         Assert.Equal("tenant-z", evt.TenantId);

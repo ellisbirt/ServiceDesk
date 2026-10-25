@@ -218,7 +218,7 @@ public class RedactionTests
         using var f = new ApiFactory();
         f.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
         EchoConversation(f);
-        var res = await f.CreateClient().SendAsync(Request("VPN fails, password=hunter2"));
+        var (_, _, res) = await f.SendAndConfirmAsync(f.CreateClient(), "VPN fails, password=hunter2");
 
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         Assert.Contains("password=[REDACTED:secret]", TicketText(f));
@@ -268,13 +268,13 @@ public class RedactionTests
         using var permissive = new ApiFactory();
         permissive.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
         EchoConversation(permissive);
-        await permissive.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
+        await permissive.SendAndConfirmAsync(permissive.CreateClient(), "VPN down, reach me at bob@example.com");
         Assert.Contains("bob@example.com", TicketText(permissive));
 
         using var strict = new ApiFactory(settings: new Dictionary<string, string> { ["Dlp:Destinations:Queue:Email"] = "Redact" });
         strict.Router.Handler = _ => (ActionLanes.PrivateCorp, "");
         EchoConversation(strict);
-        await strict.CreateClient().SendAsync(Request("VPN down, reach me at bob@example.com"));
+        await strict.SendAndConfirmAsync(strict.CreateClient(), "VPN down, reach me at bob@example.com");
         Assert.DoesNotContain("bob@example.com", TicketText(strict));
     }
 

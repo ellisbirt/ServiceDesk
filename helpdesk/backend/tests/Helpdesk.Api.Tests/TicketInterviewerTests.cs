@@ -29,10 +29,12 @@ public class TicketInterviewerTests
             throw new NotSupportedException();
     }
 
-    private static string Json(bool raise, string message = "ok", string title = "", string summary = "", string history = "", string action = "", string tried = "") =>
+    private static string Json(bool raise, string message = "ok", string title = "", string summary = "", string history = "", string action = "", string tried = "",
+        bool confirmed = false) =>
         new JsonObject
         {
             ["raiseTicket"] = raise,
+            ["userConfirmed"] = confirmed,
             ["message"] = message,
             ["title"] = title,
             ["summary"] = summary,
@@ -118,8 +120,10 @@ public class TicketInterviewerTests
 
     [Theory]
     [InlineData("not json")]
-    [InlineData("""{"raiseTicket":true,"message":"x","title":"","summary":"","recommendedAction":"","stepsTried":""}""")]
-    [InlineData("""{"raiseTicket":"yes","message":"x","title":"","summary":"","conversationSummary":"","recommendedAction":"","stepsTried":""}""")]
+    [InlineData("""{"raiseTicket":true,"userConfirmed":false,"message":"x","title":"","summary":"","recommendedAction":"","stepsTried":""}""")]
+    [InlineData("""{"raiseTicket":"yes","userConfirmed":false,"message":"x","title":"","summary":"","conversationSummary":"","recommendedAction":"","stepsTried":""}""")]
+    [InlineData("""{"raiseTicket":true,"message":"x","title":"T","summary":"S","conversationSummary":"","recommendedAction":"","stepsTried":""}""")]
+    [InlineData("""{"raiseTicket":true,"userConfirmed":"yes","message":"x","title":"T","summary":"S","conversationSummary":"","recommendedAction":"","stepsTried":""}""")]
     public async Task MalformedOutput_Throws(string reply)
     {
         await Assert.ThrowsAsync<TicketInterviewException>(() => Interviewer(new ScriptedClient(reply)).InterviewAsync("user: hi"));
@@ -149,8 +153,46 @@ public class TicketInterviewerTests
 
         Assert.False(first.RaiseTicket);
         Assert.True(second.RaiseTicket);
+        Assert.False(second.UserConfirmed);
         Assert.Equal("VPN is down", second.Title);
         Assert.Equal("This morning", second.Summary);
         Assert.Contains("- This morning", second.ConversationSummary);
+    }
+
+    [Theory]
+    [InlineData("Yes, send it", true, true)]
+    [InlineData("ok", true, true)]
+    [InlineData("No, don't send it", false, false)]
+    [InlineData("Also it fails on wifi", true, false)]
+    public async Task Offline_ReadsTheAnswerToADraft(string answer, bool raise, bool confirmed)
+    {
+        var result = await new OfflineTicketInterviewer().InterviewAsync(
+            $"user: VPN is down\nuser: This morning\nassistant: draft\nuser: {answer}", proposalPending: true);
+
+        Assert.Equal(raise, result.RaiseTicket);
+        Assert.Equal(confirmed, result.UserConfirmed);
+        if (answer.StartsWith("Yes") || answer == "ok") Assert.DoesNotContain("send it", result.ConversationSummary);
+    }
+
+    [Fact]
+    public void TheClassifier_IsToldThatTheAnswerToADraftStaysInTheHandOff()
+    {
+        Assert.Contains(Prompts.TicketConfirmPrompt.Split("**")[1], Prompts.GuardrailRouter);
+        Assert.Contains("-> PRIVATE_CORP, so the hand-off can finish", Prompts.GuardrailRouter);
+    }
+
+    [Fact]
+    public async Task Parse_ReadsUserConfirmed_AndTheConfirmTurnAddsItsInstructionOnlyWhenAsked()
+    {
+        var plain = new ScriptedClient(Json(true, "Here.", title: "T", summary: "S"));
+        var result = await Interviewer(plain).InterviewAsync("user: hi");
+        Assert.False(result.UserConfirmed);
+        Assert.DoesNotContain("showed the user a ticket draft", plain.SystemPrompt);
+        Assert.Contains("userConfirmed", string.Join(",", plain.ResponseSchema!["required"]!.AsArray()));
+
+        var pending = new ScriptedClient(Json(true, "Sent.", title: "T", summary: "S", confirmed: true));
+        var confirmed = await Interviewer(pending).InterviewAsync("user: hi\nassistant: draft\nuser: yes", proposalPending: true);
+        Assert.True(confirmed.UserConfirmed);
+        Assert.Contains("showed the user a ticket draft", pending.SystemPrompt);
     }
 }
