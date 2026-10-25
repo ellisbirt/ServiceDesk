@@ -25,13 +25,37 @@ public sealed class AnthropicChatProvider(HttpClient http, LlmProviderOptions op
     public string Provider => LlmProviders.Anthropic;
     public string Model => options.Model;
     public LlmCapabilities Capabilities =>
-        LlmCapabilities.Streaming | LlmCapabilities.StructuredOutput | LlmCapabilities.ServerTools | LlmCapabilities.PromptCaching;
+        LlmCapabilities.Streaming | LlmCapabilities.StructuredOutput | LlmCapabilities.ServerTools | LlmCapabilities.PromptCaching
+        | (options.SupportsVision == false ? LlmCapabilities.None : LlmCapabilities.Vision | LlmCapabilities.Documents);
 
     public Task<string> CompleteAsync(ChatRequest request, ILlmProgress? progress = null, CancellationToken cancellationToken = default) =>
         RunAsync(request, progress, stream: false, cancellationToken);
 
     public Task<string> StreamAsync(ChatRequest request, ILlmProgress progress, CancellationToken cancellationToken = default) =>
         RunAsync(request, progress, stream: true, cancellationToken);
+
+    /// <summary>Plain text, or content blocks (images and documents first, then the text) when the request carries files.</summary>
+    internal static JsonNode UserContent(ChatRequest request)
+    {
+        if (request.Parts is not { Count: > 0 }) return request.UserContent;
+
+        var blocks = new JsonArray();
+        foreach (var part in request.Parts)
+        {
+            blocks.Add(new JsonObject
+            {
+                ["type"] = part.Kind == ChatContentKinds.Document ? "document" : "image",
+                ["source"] = new JsonObject
+                {
+                    ["type"] = "base64",
+                    ["media_type"] = part.MediaType,
+                    ["data"] = Convert.ToBase64String(part.Data)
+                }
+            });
+        }
+        blocks.Add(new JsonObject { ["type"] = "text", ["text"] = request.UserContent });
+        return blocks;
+    }
 
     private static Uri BuildUri(string? endpoint)
     {
@@ -44,7 +68,7 @@ public sealed class AnthropicChatProvider(HttpClient http, LlmProviderOptions op
     {
         using var activity = LlmTelemetry.StartRequest(Provider, Model);
 
-        var messages = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = request.UserContent });
+        var messages = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = UserContent(request) });
         var text = new StringBuilder();
         var sources = new Dictionary<string, string>(StringComparer.Ordinal);
         var totalUsage = TokenUsage.Empty;

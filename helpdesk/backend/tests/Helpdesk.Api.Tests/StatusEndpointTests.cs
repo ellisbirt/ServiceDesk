@@ -30,8 +30,41 @@ public class StatusEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, code);
         Assert.NotEqual("invalid", body.GetProperty("status").GetString());
-        var areas = body.GetProperty("checks").EnumerateArray().Select(c => c.GetProperty("area").GetString()).Distinct().ToList();
-        Assert.Equal(["Auth", "Anthropic", "Search", "Kb", "Queue", "Dlp", "Chat", "Hub", "Conversation", "Web", "Http"], areas);
+        // "Llm" (the model tiers) only appears when a chat vendor is configured, which an environment key can do.
+        var areas = body.GetProperty("checks").EnumerateArray().Select(c => c.GetProperty("area").GetString()).Distinct()
+            .Where(a => a != "Llm").ToList();
+        Assert.Equal(["Auth", "Anthropic", "Search", "Kb", "Attachments", "Queue", "Dlp", "Chat", "Hub", "Conversation", "Web", "Http"], areas);
+    }
+
+    [Fact]
+    public async Task ModelTiers_AreReported_ForTheChatVendor()
+    {
+        using var f = new ApiFactory(settings: new Dictionary<string, string> { ["Anthropic:ApiKey"] = "k" });
+        var (_, body, _) = await Read(await f.CreateClient().SendAsync(Get()));
+
+        var tiers = body.GetProperty("checks").EnumerateArray()
+            .Single(c => c.GetProperty("area").GetString() == "Llm" && c.GetProperty("name").GetString() == "Tiers");
+        var message = tiers.GetProperty("message").GetString()!;
+        Assert.Contains("fast 'claude-haiku-5-5'", message);
+        Assert.Contains("standard 'claude-sonnet-5-5'", message);
+        Assert.Contains("deep 'claude-opus-5-5'", message);
+    }
+
+    [Fact]
+    public async Task AVendorWithOneModel_ReportsThatOneModelServesEveryTier()
+    {
+        using var f = new ApiFactory(settings: new Dictionary<string, string>
+        {
+            ["Llm:Roles:chat:Provider"] = "lm_studio",
+            ["Llm:Roles:chat:Model"] = "local-model"
+        });
+        var (_, body, _) = await Read(await f.CreateClient().SendAsync(Get()));
+
+        var tiers = body.GetProperty("checks").EnumerateArray()
+            .Single(c => c.GetProperty("area").GetString() == "Llm" && c.GetProperty("name").GetString() == "Tiers");
+        var message = tiers.GetProperty("message").GetString()!;
+        Assert.Contains("fast 'local-model', standard 'local-model', deep 'local-model'", message);
+        Assert.Contains("one model serves every tier", message);
     }
 
     [Theory]

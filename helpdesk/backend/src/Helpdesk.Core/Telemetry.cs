@@ -46,6 +46,9 @@ public static class Telemetry
     public static readonly Histogram<double> KbSearchDuration =
         Meter.CreateHistogram<double>("helpdesk.kb.search.duration", unit: "s", description: "Wall time of a knowledge-base retrieval.");
 
+    public static readonly Counter<long> InferenceRoutes =
+        Meter.CreateCounter<long>("helpdesk.inference.routes", description: "Answer-lane questions routed to a model tier, by lane, tier and reason.");
+
     public static readonly Counter<long> PrefilterBlocks =
         Meter.CreateCounter<long>("helpdesk.guardrail.prefilter.blocks", description: "Requests blocked by deterministic guardrail rules.");
 }

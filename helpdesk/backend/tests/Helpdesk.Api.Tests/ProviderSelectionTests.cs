@@ -94,6 +94,6 @@ public class ProviderSelectionTests
             ["Llm:Roles:chat:ApiKey"] = "test-key"
         };
 
-        Assert.Throws<InvalidOperationException>(() => ChatProvider(settings));
+        Assert.Throws<InvalidOperationException>(() => ChatProvider(settings).Provider);
     }
 }

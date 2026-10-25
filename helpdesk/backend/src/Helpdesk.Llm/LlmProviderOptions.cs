@@ -27,6 +27,35 @@ public static class LlmProviders
 }
 
 /// <summary>
+/// The model a vendor uses for the Fast or Deep tier of a role. Costs apply to that model only: left empty they are not
+/// estimated, so a cheaper model is never priced at the standard model's rates.
+/// </summary>
+public sealed class LlmTierOptions
+{
+    /// <summary>Model id (or Azure deployment name). Empty means the vendor's default for the tier, if it has one.</summary>
+    public string? Model { get; set; }
+    public decimal? InputCostPerMillionUsd { get; set; }
+    public decimal? CacheWriteCostPerMillionUsd { get; set; }
+    public decimal? CacheReadCostPerMillionUsd { get; set; }
+    public decimal? OutputCostPerMillionUsd { get; set; }
+}
+
+/// <summary>
+/// The models a vendor offers for the Fast and Deep tiers when the role does not name them. Only vendors with a known
+/// model family are listed; the others (OpenAI, Azure OpenAI, Grok and local servers) use the role's own model for every
+/// tier until the tier models are configured.
+/// </summary>
+public static class LlmTierDefaults
+{
+    public static string? Model(string provider, ModelTier tier) => (provider, tier) switch
+    {
+        (LlmProviders.Anthropic, ModelTier.Fast) => "claude-haiku-5-5",
+        (LlmProviders.Anthropic, ModelTier.Deep) => "claude-opus-5-5",
+        _ => null
+    };
+}
+
+/// <summary>
 /// Settings for one model role, bound from <c>Llm:Roles:&lt;role&gt;</c>. Every provider shares this shape so a role
 /// can be repointed at another provider by configuration alone.
 /// </summary>
@@ -47,6 +76,11 @@ public sealed class LlmProviderOptions
     public string AnthropicVersion { get; set; } = "2023-06-01";
 
     public int MaxTokens { get; set; } = 1024;
+    /// <summary>
+    /// Whether the model can read images. Unset uses the vendor's usual answer: yes for Anthropic, OpenAI, Azure OpenAI
+    /// and Grok, no for local servers (Ollama, LM Studio), where it depends on the model that is loaded.
+    /// </summary>
+    public bool? SupportsVision { get; set; }
     /// <summary>Overrides the model-name heuristic for whether sampling temperature may be sent.</summary>
     public bool? SupportsTemperature { get; set; }
     /// <summary>Embedding vector length. Required for embedding models we do not recognise.</summary>
@@ -60,6 +94,39 @@ public sealed class LlmProviderOptions
     public decimal? CacheWriteCostPerMillionUsd { get; set; }
     public decimal? CacheReadCostPerMillionUsd { get; set; }
     public decimal? OutputCostPerMillionUsd { get; set; }
+
+    /// <summary>The Fast tier's model. Leave unset to use the vendor's default (or <see cref="Model"/> if it has none).</summary>
+    public LlmTierOptions? FastTier { get; set; }
+    /// <summary>The Deep tier's model. Leave unset to use the vendor's default (or <see cref="Model"/> if it has none).</summary>
+    public LlmTierOptions? DeepTier { get; set; }
+
+    /// <summary>The model that serves <paramref name="tier"/>: the configured one, else the vendor's default, else <see cref="Model"/>.</summary>
+    public string TierModel(ModelTier tier) => ForTier(tier).Model;
+
+    /// <summary>
+    /// The settings for one tier. The Standard tier is this role itself, and a tier that resolves to the same model
+    /// returns this instance, so a vendor with a single model serves every tier unchanged.
+    /// </summary>
+    public LlmProviderOptions ForTier(ModelTier tier)
+    {
+        if (tier == ModelTier.Standard) return this;
+
+        var configured = tier == ModelTier.Fast ? FastTier : DeepTier;
+        var model = !string.IsNullOrWhiteSpace(configured?.Model)
+            ? configured.Model
+            : LlmTierDefaults.Model(LlmProviders.Normalize(Provider), tier) ?? Model;
+        if (string.Equals(model, Model, StringComparison.OrdinalIgnoreCase)) return this;
+
+        var copy = Clone();
+        copy.Model = model;
+        copy.InputCostPerMillionUsd = configured?.InputCostPerMillionUsd;
+        copy.CacheWriteCostPerMillionUsd = configured?.CacheWriteCostPerMillionUsd;
+        copy.CacheReadCostPerMillionUsd = configured?.CacheReadCostPerMillionUsd;
+        copy.OutputCostPerMillionUsd = configured?.OutputCostPerMillionUsd;
+        copy.FastTier = null;
+        copy.DeepTier = null;
+        return copy;
+    }
 
     public LlmProviderOptions Clone() => (LlmProviderOptions)MemberwiseClone();
 

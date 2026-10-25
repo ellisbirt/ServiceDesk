@@ -74,7 +74,10 @@ public sealed class OpenAiCompatibleChatProvider : IChatProvider
 
     public string Provider { get; }
     public string Model => _options.Model;
-    public LlmCapabilities Capabilities => LlmCapabilities.Streaming | LlmCapabilities.StructuredOutput;
+    public LlmCapabilities Capabilities => LlmCapabilities.Streaming | LlmCapabilities.StructuredOutput
+        | (_options.SupportsVision ?? Provider is LlmProviders.OpenAI or LlmProviders.AzureOpenAI or LlmProviders.Grok
+            ? LlmCapabilities.Vision
+            : LlmCapabilities.None);
 
     public Task<string> CompleteAsync(ChatRequest request, ILlmProgress? progress = null, CancellationToken cancellationToken = default) =>
         RunAsync(request, progress, stream: false, cancellationToken);
@@ -126,6 +129,24 @@ public sealed class OpenAiCompatibleChatProvider : IChatProvider
         }
     }
 
+    /// <summary>Plain text, or text plus <c>image_url</c> parts when the request carries images. Documents are not sent: callers give these models extracted text.</summary>
+    internal static JsonNode UserContent(ChatRequest request)
+    {
+        var images = request.Parts?.Where(p => p.Kind == ChatContentKinds.Image).ToList();
+        if (images is not { Count: > 0 }) return request.UserContent;
+
+        var content = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = request.UserContent });
+        foreach (var image in images)
+        {
+            content.Add(new JsonObject
+            {
+                ["type"] = "image_url",
+                ["image_url"] = new JsonObject { ["url"] = $"data:{image.MediaType};base64,{Convert.ToBase64String(image.Data)}" }
+            });
+        }
+        return content;
+    }
+
     private JsonObject BuildBody(ChatRequest request, bool stream)
     {
         var body = new JsonObject
@@ -133,7 +154,7 @@ public sealed class OpenAiCompatibleChatProvider : IChatProvider
             ["model"] = _options.Model,
             ["messages"] = new JsonArray(
                 new JsonObject { ["role"] = "system", ["content"] = request.SystemPrompt },
-                new JsonObject { ["role"] = "user", ["content"] = request.UserContent })
+                new JsonObject { ["role"] = "user", ["content"] = UserContent(request) })
         };
         // OpenAI's newer models (and Azure deployments of them) only accept max_completion_tokens.
         var tokenParameter = Provider is LlmProviders.OpenAI or LlmProviders.AzureOpenAI ? "max_completion_tokens" : "max_tokens";

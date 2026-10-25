@@ -154,7 +154,7 @@ public class KnowledgeBaseSearchTests
     private sealed class FakeRouter(FakeEmbedding? embedding) : ILlmProviderRouter
     {
         public bool HasRole(string role) => embedding is not null && role == "embedding";
-        public IChatProvider GetChat(string role) => throw new NotSupportedException();
+        public IChatProvider GetChat(string role, ModelTier tier = ModelTier.Standard) => throw new NotSupportedException();
         public IEmbeddingProvider GetEmbedding(string role) => embedding ?? throw new InvalidOperationException("no role");
         public LlmProviderOptions? Describe(string role) => null;
     }

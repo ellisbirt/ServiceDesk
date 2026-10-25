@@ -25,8 +25,8 @@ public sealed class LlmProviderRouter(
 
     public bool HasRole(string role) => options.Value.Roles.ContainsKey(role);
 
-    public IChatProvider GetChat(string role) =>
-        _chat.GetOrAdd(role, r => new Lazy<IChatProvider>(() => CreateChat(Resolve(r)))).Value;
+    public IChatProvider GetChat(string role, ModelTier tier = ModelTier.Standard) =>
+        _chat.GetOrAdd($"{role}|{tier}", _ => new Lazy<IChatProvider>(() => CreateChat(Resolve(role).ForTier(tier)))).Value;
 
     public IEmbeddingProvider GetEmbedding(string role) =>
         _embedding.GetOrAdd(role, r => new Lazy<IEmbeddingProvider>(() => CreateEmbedding(Resolve(r)))).Value;

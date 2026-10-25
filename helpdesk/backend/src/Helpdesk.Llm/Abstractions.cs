@@ -31,6 +31,20 @@ public sealed class LlmRefusalException(string message) : Exception(message);
 /// <summary>The provider cannot honour a request feature (for example native web search on a non-Anthropic model).</summary>
 public sealed class LlmCapabilityException(string message) : Exception(message);
 
+/// <summary>
+/// How much model a call needs. Each vendor provides the tiers; one that offers fewer models serves several tiers with
+/// the same model (for example a single local model).
+/// </summary>
+public enum ModelTier
+{
+    /// <summary>Small, cheap and quick: short, routine work such as classification and simple questions.</summary>
+    Fast,
+    /// <summary>The default model of the role.</summary>
+    Standard,
+    /// <summary>The most capable model, for large or complex work.</summary>
+    Deep
+}
+
 /// <summary>One single-turn model call. Callers wrap untrusted text before putting it in <see cref="UserContent"/>.</summary>
 public sealed record ChatRequest
 {
@@ -58,6 +72,10 @@ public sealed record ChatRequest
     public JsonObject? ResponseSchema { get; init; }
     /// <summary>Provider-native server tools. Only providers with <see cref="LlmCapabilities.ServerTools"/> accept them.</summary>
     public JsonArray? Tools { get; init; }
+    /// <summary>Images and documents to show the model with the text. Providers without <see cref="LlmCapabilities.Vision"/> must not be sent images.</summary>
+    public IReadOnlyList<ChatContentPart>? Parts { get; init; }
+    /// <summary>Which of the vendor's models should serve the call. Providers ignore it; the router and tier decorator act on it.</summary>
+    public ModelTier Tier { get; init; } = ModelTier.Standard;
 }
 
 [Flags]
@@ -68,7 +86,24 @@ public enum LlmCapabilities
     StructuredOutput = 2,
     /// <summary>Server-side tools such as Anthropic's web search.</summary>
     ServerTools = 4,
-    PromptCaching = 8
+    PromptCaching = 8,
+    /// <summary>Can read images given with the request.</summary>
+    Vision = 16,
+    /// <summary>Can read PDF documents given natively with the request.</summary>
+    Documents = 32
+}
+
+/// <summary>An image or document that is sent to the model next to the text of a request.</summary>
+/// <param name="Kind"><see cref="ChatContentKinds.Image"/> or <see cref="ChatContentKinds.Document"/>.</param>
+/// <param name="MediaType">For example <c>image/png</c> or <c>application/pdf</c>.</param>
+/// <param name="Data">The file bytes.</param>
+/// <param name="Name">The file name, for logs and prompts only.</param>
+public sealed record ChatContentPart(string Kind, string MediaType, byte[] Data, string? Name = null);
+
+public static class ChatContentKinds
+{
+    public const string Image = "image";
+    public const string Document = "document";
 }
 
 public interface IChatProvider
@@ -99,7 +134,7 @@ public interface IEmbeddingProvider
 public interface ILlmProviderRouter
 {
     bool HasRole(string role);
-    IChatProvider GetChat(string role);
+    IChatProvider GetChat(string role, ModelTier tier = ModelTier.Standard);
     IEmbeddingProvider GetEmbedding(string role);
     /// <summary>The effective settings for a role (API key removed), or null when the role is not configured.</summary>
     LlmProviderOptions? Describe(string role);
