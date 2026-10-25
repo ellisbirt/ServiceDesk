@@ -95,6 +95,16 @@ Set secrets with `dotnet user-secrets` or environment variables (`Anthropic__Api
 | `Http:Csp:AuthorityOrigins`, `Http:Csp:Policy` | Content-Security-Policy for the hosted SPA. Authority origins default to the origin of `Auth:Authority`; `Policy` replaces the generated policy. `AllowedHosts: *` is reported as a warning by `/status`. |
 | `Chat:KeepAliveSeconds`, `Chat:ClientTimeoutSeconds` | SignalR transport ping (default 15) and client timeout (default 60). Keep the timeout at least twice the ping. The UI client uses a 60 s server timeout to match. |
 
+## LLM providers
+
+The service is deliberately LLM-agnostic: the chat and embedding model sit behind `IChatProvider` and `IEmbeddingProvider` (the shared `Helpdesk.Llm` library), and the vendor is chosen in configuration (`Llm:Roles:<role>`), not in code. The other vendors are kept as a working example of that design, and their status is stated plainly:
+
+| Provider | Status | Notes |
+|---|---|---|
+| Anthropic (Claude) | **Supported.** The default, and the only vendor checked against a live API (see `docs/design-decisions.md` D7.8 and D9.6). | Native web search, vision and documents, three built-in model tiers. |
+| OpenAI, Azure OpenAI, Grok, Ollama, LM Studio | **Experimental.** Implemented and covered by offline tests with a fake HTTP layer, but never run against the live service. | No built-in tier models: every tier uses the role's model until `FastTier:Model` and `DeepTier:Model` are set. Expect to fix rough edges (model ids, capability flags, structured-output quirks) when you first use one. |
+| Offline | Development stand-in. | A keyword router and canned replies; it tests the plumbing, not the prompts. |
+
 ## Model tiers and routing
 
 The vendor is fixed for a run of the backend: `Llm:Roles:chat` (or the `Anthropic` section) picks one. Within it each vendor provides three tiers, and every model call names the tier it needs:
@@ -220,14 +230,16 @@ Helpdesk reads AgentDesk's Cosmos schema directly (`CosmosKbSource`), so a chang
 
 `PUBLIC_SEARCH` answers are grounded in live search. Switch backend with one setting, e.g. `Search__Provider=Serper` plus `Search__Providers__Serper__ApiKey`.
 
-| Provider | Free option | Notes |
-|---|---|---|
-| `Tavily` | 1,000 credits/month, no card | Used when nothing else is configured and the chat vendor is not Anthropic (see `Search:Provider`). |
-| `Brave` | none (paid) | |
-| `Serper` | 2,500 queries, one-off | Google results. |
-| `Google` | about 100 queries/day | Programmable Search; needs API key and engine id (`cx`). |
-| `SearXNG` | free, self-hosted | Needs the `json` output format enabled on the instance. |
-| `Claude` | none (billed per search on your Anthropic account) | Claude searches the web itself via Anthropic's server-side web search tool, so no other account or key is needed. Slower (around 15 s) and web search must be enabled for your Anthropic organisation. Sources are appended as links. Tune with `Anthropic:WebSearchMaxUses` and `Anthropic:WebSearchToolType`. |
+Status: `Tavily` and `Claude` are the supported choices. `Brave`, `Serper`, `Google` and `SearXNG` are **experimental**: implemented and covered by offline tests, but never run against the live service. They are kept as examples of a pluggable search backend, so expect to fix rough edges when you first use one.
+
+| Provider | Status | Free option | Notes |
+|---|---|---|---|
+| `Tavily` | Supported | 1,000 credits/month, no card | Used when nothing else is configured and the chat vendor is not Anthropic (see `Search:Provider`). |
+| `Brave` | Experimental | none (paid) | |
+| `Serper` | Experimental | 2,500 queries, one-off | Google results. |
+| `Google` | Experimental | about 100 queries/day | Programmable Search; needs API key and engine id (`cx`). |
+| `SearXNG` | Experimental | free, self-hosted | Needs the `json` output format enabled on the instance. |
+| `Claude` | Supported | none (billed per search on your Anthropic account) | Claude searches the web itself via Anthropic's server-side web search tool, so no other account or key is needed. Slower (around 15 s) and web search must be enabled for your Anthropic organisation. Sources are appended as links. Tune with `Anthropic:WebSearchMaxUses` and `Anthropic:WebSearchToolType`. |
 
 To add a provider, implement `ISearchProvider` in `Infrastructure/Search/Providers` with a static `SearchProviderDefinition`, then add it to `SearchProviderCatalog.All`.
 
