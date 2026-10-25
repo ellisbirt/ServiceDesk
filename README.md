@@ -16,6 +16,19 @@ I built it with AI assistance (Claude Code), and the commit trailers say so. The
 | [`python-evals/`](python-evals/) | `promptevals`, a Python CLI that runs the cases against a prompt variant, grades the results and compares variants. |
 | [`docs/`](docs/) | [`design-decisions.md`](docs/design-decisions.md): what I decided, why, what it costs, and the known gaps. Start here to see how I think about the design. |
 
+## Scope
+
+The charter is small: classify an IT request, resolve what can safely be resolved (knowledge base, web search), coach when a request can't be done as asked, and otherwise gather details in conversation and hand a confirmed ticket to a human ([D1.1 to D1.3](docs/design-decisions.md#1-product-shape)). Not everything here serves that equally, so each area is labelled:
+
+| Tier | What it covers |
+|---|---|
+| **Core** | The classify, route and hand-off pipeline (lanes, coach, ticket interviewer with draft confirmation, ticket event), data redaction (`Helpdesk.Dlp`), signed stateless conversation history, and the prompt eval harness (`evals/`, `python-evals/`). |
+| **Supporting** | Things that make the core usable and safe, kept proportionate: model tiers and refusal handling, knowledge-base retrieval, web search (Tavily or Claude's native search), streaming and the chat job lifecycle, startup config validation, and the unit, API and browser tests. |
+| **Extension** | Deliberate additions beyond the charter: file attachments ([D8](docs/design-decisions.md#8-attachments)) and AgentDesk, the downstream agent console (secondary; it shares the `Llm`, `Dlp` and `Shared` libraries with `helpdesk/`). |
+| **Optional** | Implemented and covered by offline tests, but not part of the main path, and only Anthropic is documented as checked against a live API: the non-Anthropic LLM vendors, the other search providers, per-tenant DLP policy, and the second queue backend. |
+
+New work needs to serve a line of the charter, or be recorded as an extension with its cost ([D1.5 and D1.6](docs/design-decisions.md#1-product-shape)).
+
 ## Where to start
 
 - To see the design and trade-offs, read [`docs/design-decisions.md`](docs/design-decisions.md).

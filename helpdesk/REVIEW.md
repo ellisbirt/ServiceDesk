@@ -1,5 +1,7 @@
 # Enterprise / SaaS review: Helpdesk Intake (triage and ingestion)
 
+> **Historical snapshot, not maintained.** This is a review of the intake service as it stood on 2026-10-12, kept for the reasoning. Open items are tracked in "Known gaps" in [`README.md`](README.md) and in [`../docs/design-decisions.md`](../docs/design-decisions.md#11-known-gaps-and-rejected-alternatives). Many findings here describe enterprise needs beyond the project's charter (see D1.5 and D1.6 there), so treat them as a menu of options, not a backlog.
+
 Reviewed 2026-10-12. Scope: `backend/` (.NET 10) and `frontend/` (React 19), **as the intake component of a larger system**. This revision re-scopes the earlier review: findings are split into what this component must fix, what it must emit or enforce for the rest of the platform, and what belongs to other components.
 
 > **Update 2026-10-25.** This is a snapshot from 2026-10-12 and the counts below are from then. Since then: the code is under git (the parent `service-desk/` repo) but there is still no CI (finding 1); the access-request card is gone (finding 2); the event carries `schemaVersion` (finding 3); history reaches inference as well as the classifier (finding 13); and a ticket is now queued only after the user confirms a draft (see `docs/design-decisions.md` D2.6). Current test counts are 641 API, 43 library and 35 browser tests, and 193 frontend tests. Findings not mentioned here have not been re-checked.

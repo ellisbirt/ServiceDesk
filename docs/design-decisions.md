@@ -31,6 +31,16 @@ Entries are grouped by theme and numbered so I can refer to them. "My call" mark
 
 **D1.4. AgentDesk is a downstream consumer, not the focus.** I froze it except where the ticket contract changes (summary fields, attachments). I built knowledge-base retrieval into the intake because AgentDesk already writes the articles. It reads AgentDesk's Cosmos schema directly.
 
+**D1.5. Everything in the repo has a scope tier.** The repo has grown past the charter in D1.1 to D1.3, so each area is labelled in the root README:
+- *Core:* the classify, route and hand-off pipeline, redaction, signed stateless history, and the prompt evals.
+- *Supporting:* model tiers and refusal handling, knowledge-base retrieval, web search (Tavily or native Claude search), streaming and the job lifecycle, startup config validation, and the tests.
+- *Extension:* attachments (D8) and AgentDesk (D1.4). Both are deliberate and bounded, and both carry real cost: attachments are roughly a sixth of the helpdesk code, and AgentDesk is about a quarter of the repo.
+- *Optional:* the non-Anthropic LLM vendors, the other search providers, per-tenant DLP policy and the second queue backend. They work and have offline tests, but only Anthropic is documented as live-checked (D7.8, D9.6).
+
+*Why:* a reader should be able to tell the showcase from the extras without reading the code, and I should be able to tell whether a change is core work or an extra. *Cost:* the labels are my judgement and need updating when something moves between tiers. Trimming the optional tier is still an open decision, and I haven't cut anything yet.
+
+**D1.6. A scope check for new work.** A new feature must either serve a line of the charter (D1.1 to D1.3) or be recorded here as an extension with its cost: lines of code and tests, docs, and the decisions it adds. If it is optional, its docs say so. If it fits neither, it goes on the "not built" list (D11.10) instead of the codebase. *Why:* most of the current breadth came from asking "what would a real SaaS need" after a review, not from the charter. This is the check I should have applied then.
+
 ---
 
 ## 2. Conversational hand-off
