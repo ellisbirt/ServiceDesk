@@ -252,6 +252,34 @@ After `pip install -e .` has been run before this folder existed, run it once mo
 `pytest` covers all of this offline with a fake of the intake API (`tests/test_app_evals.py`): prompt export, a drift guard
 that fails when `Prompts.cs` changes without a re-export, the entrypoint, the case set, and the whole run through the harness.
 
+## Slow local models (LM Studio, Ollama)
+
+On modest hardware a local model can take minutes per reply (on a 2014 quad-core CPU with no GPU, LM Studio needed 2 to 6 minutes before the first token of the app's classifier reply). Every limit in the path can be raised, or set to 0 for "no limit":
+
+| Where | Setting | Default |
+|---|---|---|
+| One API request from the harness to a model | `timeout_s` in `[target]`, `[judge]` or `[generator]` | the SDK's 10 minutes |
+| One case, sampling and grading together | `timeout_s` in `[run]` | 240 s |
+| One request from the entrypoint to the running app | environment variable `SERVICE_DESK_EVAL_TIMEOUT_S` | 150 s |
+| The app's own calls to its model | `Llm__Http__AttemptTimeoutSeconds`, `Llm__Http__TotalTimeoutSeconds`, `Llm__Roles__chat__StreamIdleTimeoutSeconds` | 60 s, 150 s, 30 s (see `helpdesk/README.md`, "LLM providers") |
+
+```toml
+[target]
+provider = "lm_studio"
+model = "qwen2.5-coder-14b-instruct"
+timeout_s = 0
+[judge]
+provider = "lm_studio"
+model = "dolphin-2.9.4-llama3.1-8b"      # a different model from the target, as the conventions require
+timeout_s = 0
+[run]
+concurrency = 1                           # a local server answers one request at a time
+timeout_s = 0
+max_attempts = 1                          # a retry would repeat a many-minute call
+```
+
+A local model that writes JSON less reliably than a hosted one will fail some structured-output graders for reasons that say nothing about the prompt, so read a first run with that in mind.
+
 ## Output layout
 
 ```

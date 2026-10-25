@@ -58,6 +58,8 @@ Set secrets with `dotnet user-secrets` or environment variables (`Anthropic__Api
 | `Attachments:PasteMinChars`, `PasteMinLines` | The browser turns pasted text into an attachment at this length (default 1,500 characters or 25 lines), or sooner if it looks like a log. |
 | `Attachments:RetentionHours`, `CleanupIntervalMinutes` | Files from conversations that never raised a ticket are deleted after 24 hours; the cleanup runs every 30 minutes. |
 | `Attachments:MaxOfficeUncompressedBytes`, `MaxOfficeEntries`, `MaxPdfPages`, `MaxExtractedChars` | Parsing limits against zip bombs and huge documents. |
+| `Llm:Http:AttemptTimeoutSeconds`, `Llm:Http:TotalTimeoutSeconds` | How long a call to a model may take: one try (default 60) and the whole call including retries (default 150). **0 means no limit** (in practice 12 hours per try and 24 hours in total, the most the HTTP resilience pipeline accepts). For a slow local model; see "LLM providers". A per-try limit is held below the total, and `/status` reports a pair that needed that. Shared by every role and by AgentDesk. |
+| `Llm:Roles:chat:StreamIdleTimeoutSeconds` | How long a streamed reply may be silent before it is abandoned (default 30). **0 means never.** A local model can be silent for minutes while it reads the prompt. |
 | `Llm:Roles:chat:SupportsVision` | Whether the model can read images. Unset assumes yes for Anthropic, OpenAI, Azure OpenAI and Grok, and no for Ollama and LM Studio (it depends on the loaded model). |
 | `Anthropic:WebSearchToolType`, `Anthropic:WebSearchMaxUses` | Anthropic-hosted Claude web search tool version (default `web_search_20260318`) and maximum searches per request (default 3). |
 | `Search:Provider` | Web search backend for the `PUBLIC_SEARCH` lane. One of `Tavily`, `Brave`, `Serper`, `Google`, `SearXNG`, or `Claude` (see "Web search providers"). Leave it empty to follow the chat vendor: a third-party provider that already has credentials (or the legacy `Search:ApiKey`, which means Tavily) is used first, then Claude's own web search when the chat vendor is Anthropic, otherwise Tavily (a stub until it has a key). |
@@ -102,8 +104,24 @@ The service is deliberately LLM-agnostic: the chat and embedding model sit behin
 | Provider | Status | Notes |
 |---|---|---|
 | Anthropic (Claude) | **Supported.** The default, and the only vendor checked against a live API (see `docs/design-decisions.md` D7.8 and D9.6). | Native web search, vision and documents, three built-in model tiers. |
-| OpenAI, Azure OpenAI, Grok, Ollama, LM Studio | **Experimental.** Implemented and covered by offline tests with a fake HTTP layer, but never run against the live service. | No built-in tier models: every tier uses the role's model until `FastTier:Model` and `DeepTier:Model` are set. Expect to fix rough edges (model ids, capability flags, structured-output quirks) when you first use one. |
+| LM Studio | **Checked live, partly** (2026-10-25). Chat with a JSON schema, streaming and embeddings worked through the real provider against `qwen2.5-coder-14b-instruct` and `text-embedding-nomic-embed-text-v1.5` (768 dimensions), with the model-call limits off. | Needs those limits off or raised on slow hardware (see below). A partial eval run on a 14B model got one classification wrong (see `docs/design-decisions.md` D9.8); that is a model-quality result, not a provider fault. Not checked: tool use, vision, and a full eval run. |
+| OpenAI, Azure OpenAI, Grok, Ollama | **Experimental.** Implemented and covered by offline tests with a fake HTTP layer, but never run against the live service. | No built-in tier models: every tier uses the role's model until `FastTier:Model` and `DeepTier:Model` are set. Expect to fix rough edges (model ids, capability flags, structured-output quirks) when you first use one. |
 | Offline | Development stand-in. | A keyword router and canned replies; it tests the plumbing, not the prompts. |
+
+**Running on a local model (LM Studio, Ollama).** On modest hardware a local model can take minutes to start answering: on a 2014 quad-core CPU with no GPU, LM Studio took 2 to 6 minutes before the first token of the classifier's reply. The default limits are tuned for hosted vendors and would cut every call off, so switch them off for the run:
+
+```powershell
+$env:Llm__Roles__chat__Provider = "lm_studio"
+$env:Llm__Roles__chat__Model = "qwen2.5-coder-14b-instruct"     # whatever LM Studio has loaded
+$env:Llm__Http__AttemptTimeoutSeconds = "0"                      # no limit on one try
+$env:Llm__Http__TotalTimeoutSeconds = "0"                        # or on the whole call
+$env:Llm__Roles__chat__StreamIdleTimeoutSeconds = "0"            # or on a silent stream
+$env:Chat__JobTimeoutSeconds = "3600"                            # SignalR path only: the limit on one chat job (default 600)
+$env:Kb__Provider = ""                                           # keep the knowledge base off unless Cosmos is running
+cd backend\src\Helpdesk.Api; dotnet run --launch-profile http
+```
+
+For embeddings use `Llm:Roles:embedding` with `Provider` `lm_studio`, a loaded embedding model and its `Dimensions` (for example `text-embedding-nomic-embed-text-v1.5`, 768). Hosted vendors should keep the defaults: the limits are what stops a stuck call from holding a request open.
 
 ## Model tiers and routing
 
