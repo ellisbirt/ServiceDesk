@@ -10,7 +10,7 @@ helpdesk/
   frontend/   React 19 + TypeScript + Vite + Tailwind
 ```
 
-** NB: ** This is a work in progress and part of a larger system that has not been fully implemented.  The project is a personal project to bring together enterprise SaaS and AI concepts
+** NB: ** This is a work in progress and part of a larger system that has not been fully implemented.  The project is a personal project to bring together enterprise SaaS and AI concepts.
 
 ## Run locally (no cloud accounts needed)
 
