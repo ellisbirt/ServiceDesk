@@ -41,7 +41,7 @@ from typing import Any
 from promptevals.cases import Case
 
 DEFAULT_URL = "http://localhost:5129"
-TIMEOUT_S = 150
+DEFAULT_TIMEOUT_S = 150
 CONNECT_TIMEOUT_S = 5
 MAX_HISTORY = 20  # the API accepts at most 20 history messages
 
@@ -51,6 +51,17 @@ TICKET_RAISED = "ticketRaised"
 
 class AppUnavailable(RuntimeError):
     """The app could not be reached or answered with an error; the harness records this as an error, never as a 0."""
+
+
+def request_timeout() -> float | None:
+    """Seconds one request to the app may take: ``SERVICE_DESK_EVAL_TIMEOUT_S``, default 150; 0 means no limit.
+
+    A slow local model behind the app (LM Studio on modest hardware) can need minutes per reply. Raise this, and the app's own
+    limits (``Llm:Http``), together.
+    """
+    raw = os.environ.get("SERVICE_DESK_EVAL_TIMEOUT_S")
+    seconds = float(raw) if raw else DEFAULT_TIMEOUT_S
+    return seconds if seconds > 0 else None
 
 
 def base_url() -> str:
@@ -79,7 +90,7 @@ def _post(url: str, body: dict[str, Any], tenant: str, user: str) -> dict[str, A
         headers={"Content-Type": "application/json", "X-Dev-Tenant": tenant, "X-Dev-User": user},
     )
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:  # noqa: S310 - a URL the operator configured
+        with urllib.request.urlopen(request, timeout=request_timeout()) as response:  # noqa: S310 - a URL the operator configured
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")[:300]

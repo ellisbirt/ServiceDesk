@@ -88,6 +88,7 @@ public sealed class LlmProviderOptions
 
     public int RateLimitMaxWaitSeconds { get; set; } = 120;
     public int RateLimitMaxRetries { get; set; } = 4;
+    /// <summary>A stream that delivers nothing for this long is abandoned. 0 means never (slow local models can be silent for minutes).</summary>
     public int StreamIdleTimeoutSeconds { get; set; } = 30;
 
     public decimal? InputCostPerMillionUsd { get; set; }
@@ -139,10 +140,55 @@ public sealed class LlmProviderOptions
     }
 }
 
+/// <summary>
+/// How long a call to a model may take (<c>Llm:Http</c>). The defaults suit hosted vendors. A local model on modest hardware
+/// (Ollama, LM Studio) can take minutes before the first token, so each limit can be raised, or set to 0 for "no limit".
+/// The HTTP resilience pipeline does not accept an infinite timeout, so "no limit" is the most it allows: 12 hours for one try
+/// (its circuit breaker window must be twice that) and 24 hours for the whole call.
+/// </summary>
+public sealed class LlmHttpOptions
+{
+    public const string SectionName = "Http";
+
+    /// <summary>The longest value accepted for one try, in seconds, and what 0 means.</summary>
+    public const int MaxAttemptSeconds = 12 * 3600;
+
+    /// <summary>The longest value accepted for the whole call, in seconds, and what 0 means.</summary>
+    public const int MaxTotalSeconds = 24 * 3600;
+
+    /// <summary>One try of one call, in seconds. 0 means no limit. A failed try can be retried, so the call may take longer.</summary>
+    public int AttemptTimeoutSeconds { get; set; } = 60;
+
+    /// <summary>The whole call including retries, in seconds. 0 means no limit.</summary>
+    public int TotalTimeoutSeconds { get; set; } = 150;
+
+    /// <summary>
+    /// What the HTTP pipeline is given. The pipeline refuses a total limit that is not longer than the per-try limit, and that
+    /// would stop the app from starting, so a per-try limit is held below the total (it could never usefully exceed it) and
+    /// both are held inside what the pipeline accepts. <c>/status</c> reports a configuration that needed this.
+    /// </summary>
+    public TimeSpan TotalTimeout =>
+        TimeSpan.FromSeconds(TotalTimeoutSeconds <= 0 ? MaxTotalSeconds : Math.Clamp(TotalTimeoutSeconds, 2, MaxTotalSeconds));
+
+    /// <inheritdoc cref="TotalTimeout"/>
+    public TimeSpan AttemptTimeout
+    {
+        get
+        {
+            var attempt = TimeSpan.FromSeconds(AttemptTimeoutSeconds <= 0 ? MaxAttemptSeconds : Math.Clamp(AttemptTimeoutSeconds, 1, MaxAttemptSeconds));
+            var total = TotalTimeout;
+            return attempt < total ? attempt : total - TimeSpan.FromSeconds(1);
+        }
+    }
+}
+
 /// <summary>Root of the <c>Llm</c> configuration section.</summary>
 public sealed class LlmOptions
 {
     public const string SectionName = "Llm";
+
+    /// <summary>Timeouts for calls to a model, shared by every role. See <see cref="LlmHttpOptions"/>.</summary>
+    public LlmHttpOptions Http { get; set; } = new();
 
     /// <summary>Role name (case-insensitive) to provider settings, e.g. <c>chat</c>, <c>assist</c>, <c>embedding</c>.</summary>
     public Dictionary<string, LlmProviderOptions> Roles { get; set; } = new(StringComparer.OrdinalIgnoreCase);

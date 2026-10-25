@@ -111,8 +111,10 @@ public static class LlmServiceCollectionExtensions
         var builder = services.AddOptions<LlmOptions>();
         if (section is not null) builder.Bind(section);
 
+        // The limits are read once, here, because the resilience handler is built with the HTTP client.
+        var http = section?.GetSection(LlmHttpOptions.SectionName).Get<LlmHttpOptions>() ?? new();
         services.AddHttpClient(LlmProviderRouter.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan)
-            .AddHelpdeskResilience(TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(150), callerHandlesRateLimits: true);
+            .AddHelpdeskResilience(http.AttemptTimeout, http.TotalTimeout, callerHandlesRateLimits: true);
         services.AddSingleton<LlmProviderRouter>();
         services.AddSingleton<ILlmProviderRouter>(sp => sp.GetRequiredService<LlmProviderRouter>());
         return services;

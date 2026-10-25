@@ -204,7 +204,7 @@ public sealed class AnthropicChatProvider(HttpClient http, LlmProviderOptions op
         var usage = TokenUsage.Empty;
 
         // Pings count as activity, so a silent connection (not a slow model) is what trips this.
-        var idleTimeout = TimeSpan.FromSeconds(options.StreamIdleTimeoutSeconds);
+        var idleTimeout = options.StreamIdleTimeoutSeconds <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(options.StreamIdleTimeoutSeconds);
         using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
         idle.CancelAfter(idleTimeout);
 

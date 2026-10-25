@@ -313,7 +313,8 @@ async def run_variant(
         async with sem:
             err: dict[str, Any] | None = None
             try:
-                row = await asyncio.wait_for(execute(case, rep), timeout=config.run.timeout_s)
+                # 0 means no ceiling (a slow local model can need more than any fixed limit).
+                row = await asyncio.wait_for(execute(case, rep), timeout=config.run.timeout_s or None)
             except asyncio.TimeoutError:
                 err = {"class": "timeout", "detail": f"exceeded {config.run.timeout_s}s"}
             except llm.RetriesExhausted as e:

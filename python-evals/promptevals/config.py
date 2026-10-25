@@ -20,6 +20,9 @@ class ModelSettings:
     endpoint: str | None = None
     api_version: str | None = None
     api_key_env: str | None = None
+    # Seconds one API request may take. None keeps the SDK default (10 minutes); 0 means no limit, which a slow
+    # local model (Ollama, LM Studio on modest hardware) may need.
+    timeout_s: float | None = None
 
 
 @dataclass
@@ -83,6 +86,7 @@ def _model(section: dict, default_model: str) -> ModelSettings:
         endpoint=section.get("endpoint"),
         api_version=section.get("api_version"),
         api_key_env=section.get("api_key_env"),
+        timeout_s=float(section["timeout_s"]) if "timeout_s" in section else None,
     )
 
 

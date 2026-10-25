@@ -101,6 +101,50 @@ public class StatusEndpointTests
     }
 
     [Theory]
+    [InlineData("Llm:Http:AttemptTimeoutSeconds", "-1")]
+    [InlineData("Llm:Http:TotalTimeoutSeconds", "-5")]
+    [InlineData("Llm:Http:AttemptTimeoutSeconds", "90000")]   // more than the 12 hours the pipeline allows
+    public async Task UnusableModelCallTimeouts_AreReported(string key, string value)
+    {
+        using var f = new ApiFactory().WithWebHostBuilder(b => b.UseSetting(key, value));
+        var (code, body, _) = await Read(await f.CreateClient().SendAsync(Get()));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, code);
+        Assert.Contains(body.GetProperty("checks").EnumerateArray(),
+            c => c.GetProperty("name").GetString() == "HttpTimeouts" && c.GetProperty("status").GetString() == "fail");
+    }
+
+    [Fact]
+    public async Task ATotalModelCallLimitShorterThanOneTry_IsReported()
+    {
+        using var f = new ApiFactory().WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Llm:Http:AttemptTimeoutSeconds", "120");
+            b.UseSetting("Llm:Http:TotalTimeoutSeconds", "60");
+        });
+        var (code, body, _) = await Read(await f.CreateClient().SendAsync(Get()));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, code);
+        Assert.Contains(body.GetProperty("checks").EnumerateArray(),
+            c => c.GetProperty("name").GetString() == "HttpTimeoutOrder" && c.GetProperty("status").GetString() == "fail");
+    }
+
+    [Fact]
+    public async Task ModelCallTimeoutsOfZero_MeanNoLimit_AndAreValid()
+    {
+        using var f = new ApiFactory().WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Llm:Http:AttemptTimeoutSeconds", "0");
+            b.UseSetting("Llm:Http:TotalTimeoutSeconds", "0");
+        });
+        var (_, body, _) = await Read(await f.CreateClient().SendAsync(Get()));
+
+        var check = body.GetProperty("checks").EnumerateArray().Single(c => c.GetProperty("name").GetString() == "HttpTimeouts");
+        Assert.Equal("pass", check.GetProperty("status").GetString());
+        Assert.Contains("no limit", check.GetProperty("message").GetString());
+    }
+
+    [Theory]
     [InlineData("Chat:MaxJobsPerTenant", "0")]
     [InlineData("Chat:FinalEventTimeoutSeconds", "0")]
     public async Task UnusableJobLimits_AreReported(string key, string value)

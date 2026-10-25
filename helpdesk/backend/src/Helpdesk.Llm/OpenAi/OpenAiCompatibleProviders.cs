@@ -207,7 +207,7 @@ public sealed class OpenAiCompatibleChatProvider : IChatProvider
         var usage = TokenUsage.Empty;
         var finished = false;
 
-        var idleTimeout = TimeSpan.FromSeconds(_options.StreamIdleTimeoutSeconds);
+        var idleTimeout = _options.StreamIdleTimeoutSeconds <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(_options.StreamIdleTimeoutSeconds);
         using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
         idle.CancelAfter(idleTimeout);
         try

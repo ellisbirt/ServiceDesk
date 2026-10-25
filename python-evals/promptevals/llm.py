@@ -268,11 +268,11 @@ class ProviderRouter:
     """Lazily creates and caches provider clients for each configured model role."""
 
     def __init__(self):
-        self._providers: dict[tuple[str, str | None, str | None, str | None], Provider] = {}
+        self._providers: dict[tuple[str, str | None, str | None, str | None, float | None], Provider] = {}
 
     def _provider(self, settings: ModelSettings) -> Provider:
         provider_name = settings.provider.lower()
-        key = (provider_name, settings.endpoint, settings.api_version, settings.api_key_env)
+        key = (provider_name, settings.endpoint, settings.api_version, settings.api_key_env, settings.timeout_s)
         if key not in self._providers:
             self._providers[key] = self._create_provider(settings)
         return self._providers[key]
@@ -284,6 +284,7 @@ class ProviderRouter:
             client_options: dict[str, Any] = {
                 "max_retries": 0,
                 **_api_key_kwargs(settings, "ANTHROPIC_API_KEY"),
+                **_timeout_kwargs(settings),
             }
             if settings.endpoint:
                 client_options["base_url"] = settings.endpoint
@@ -308,6 +309,7 @@ class ProviderRouter:
                 azure_endpoint=endpoint,
                 api_version=api_version,
                 **_api_key_kwargs(settings, "AZURE_OPENAI_API_KEY", required=True),
+                **_timeout_kwargs(settings),
             )
             return MicrosoftProvider(client)
 
@@ -328,6 +330,7 @@ class ProviderRouter:
         client = AsyncOpenAI(
             base_url=settings.endpoint or default_endpoint,
             **kwargs,
+            **_timeout_kwargs(settings),
         )
         token_param = "max_completion_tokens" if name == "openai" else "max_tokens"
         return provider_type(client, max_tokens_parameter=token_param)
@@ -350,6 +353,14 @@ class ProviderRouter:
             stream=stream,
             allow_fallback=allow_fallback,
         )
+
+
+def _timeout_kwargs(settings: ModelSettings) -> dict[str, Any]:
+    """The SDK's default request timeout unless the model sets `timeout_s`; 0 switches the limit off."""
+    if settings.timeout_s is None:
+        return {}
+    # Both SDKs take seconds, or None for no limit.
+    return {"timeout": settings.timeout_s if settings.timeout_s > 0 else None}
 
 
 def _api_key_kwargs(

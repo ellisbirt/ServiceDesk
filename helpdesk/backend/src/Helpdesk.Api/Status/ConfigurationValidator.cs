@@ -117,8 +117,8 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
         check(o.RateLimitMaxWaitSeconds >= 0 && o.RateLimitMaxRetries >= 0, area, "RateLimits",
             "Rate-limit wait and retries are not negative.",
             "Anthropic:RateLimitMaxWaitSeconds and Anthropic:RateLimitMaxRetries must not be negative.");
-        check(o.StreamIdleTimeoutSeconds > 0, area, "StreamIdleTimeout",
-            "Stream idle timeout is positive.", "Anthropic:StreamIdleTimeoutSeconds must be greater than 0.");
+        check(o.StreamIdleTimeoutSeconds >= 0, area, "StreamIdleTimeout",
+            "Stream idle timeout is not negative.", "Anthropic:StreamIdleTimeoutSeconds must not be negative (0 means never).");
         check(o.WebSearchMaxUses > 0 && !string.IsNullOrWhiteSpace(o.WebSearchToolType), area, "WebSearchTool",
             "Web search tool settings are valid.", "Anthropic:WebSearchToolType must be set and Anthropic:WebSearchMaxUses greater than 0.");
     }
@@ -127,6 +127,15 @@ public sealed partial class ConfigurationValidator(IConfiguration config, IHostE
     private void ValidateLlm(Report pass, Report fail, Verify check)
     {
         const string area = "Llm";
+        var http = config.GetSection($"{LlmOptions.SectionName}:{LlmHttpOptions.SectionName}").Get<LlmHttpOptions>() ?? new();
+        string Limit(int seconds) => seconds <= 0 ? "no limit" : $"{seconds} s";
+        check(http.AttemptTimeoutSeconds is >= 0 and <= LlmHttpOptions.MaxAttemptSeconds
+              && http.TotalTimeoutSeconds is >= 0 and <= LlmHttpOptions.MaxTotalSeconds, area, "HttpTimeouts",
+            $"Model calls: {Limit(http.AttemptTimeoutSeconds)} per try, {Limit(http.TotalTimeoutSeconds)} in total.",
+            $"Llm:Http:AttemptTimeoutSeconds must be 0 to {LlmHttpOptions.MaxAttemptSeconds} and Llm:Http:TotalTimeoutSeconds 0 to {LlmHttpOptions.MaxTotalSeconds} (0 means no limit, which is the maximum).");
+        check(http.AttemptTimeoutSeconds <= 0 || http.TotalTimeoutSeconds <= 0 || http.TotalTimeoutSeconds >= http.AttemptTimeoutSeconds,
+            area, "HttpTimeoutOrder", "The total model-call limit is not shorter than one try.",
+            "Llm:Http:TotalTimeoutSeconds must be at least Llm:Http:AttemptTimeoutSeconds (or 0 for no limit).");
         var role = ExplicitChatRole();
         if (role is null)
         {
