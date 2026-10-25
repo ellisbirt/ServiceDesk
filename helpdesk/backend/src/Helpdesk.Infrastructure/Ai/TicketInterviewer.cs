@@ -9,7 +9,7 @@ namespace Helpdesk.Infrastructure.Ai;
 /// Lets the model run the hand-off conversation: each turn it either asks for what is missing or raises the ticket.
 /// There is no fixed form; what to ask depends on what the user has already said.
 /// </summary>
-public sealed class AnthropicTicketInterviewer(IChatProvider client, IOptions<AnthropicOptions> options) : ITicketInterviewer
+public sealed class TicketInterviewer(IChatProvider client, IOptions<AnthropicOptions> options) : ITicketInterviewer
 {
     private readonly AnthropicOptions _options = options.Value;
 

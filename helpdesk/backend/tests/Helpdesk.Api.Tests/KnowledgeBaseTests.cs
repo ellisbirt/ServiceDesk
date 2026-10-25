@@ -452,7 +452,7 @@ public class KnowledgeBasePromptTests
         new("2", "KB2", "Two", "s", "steps", 1, KbMatch.Lexical)
     ];
 
-    private static AnthropicPublicInferenceService Service(ScriptedChatProvider client, string search = "Tavily") =>
+    private static PublicInferenceService Service(ScriptedChatProvider client, string search = "Tavily") =>
         new(client, Options.Create(new AnthropicOptions()), Options.Create(new Helpdesk.Infrastructure.Search.SearchOptions { Provider = search }));
 
     [Fact]

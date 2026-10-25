@@ -48,8 +48,8 @@ public class RefusalTests
     [Fact]
     public async Task Classifier_TreatsARefusalAsAPolicyBlock()
     {
-        var router = new AnthropicGuardrailRouterService(
-            Refusing(), Options.Create(new AnthropicOptions()), NullLogger<AnthropicGuardrailRouterService>.Instance);
+        var router = new GuardrailRouterService(
+            Refusing(), Options.Create(new AnthropicOptions()), NullLogger<GuardrailRouterService>.Instance);
 
         var (lane, text) = await router.ClassifyAndValidateAsync("do something questionable", "tenant");
 
@@ -60,7 +60,7 @@ public class RefusalTests
     [Fact]
     public async Task PublicInference_LeavesTheRefusalToThePipeline()
     {
-        var service = new AnthropicPublicInferenceService(
+        var service = new PublicInferenceService(
             Refusing(), Options.Create(new AnthropicOptions()), Options.Create(new SearchOptions()));
 
         await Assert.ThrowsAsync<LlmRefusalException>(() => service.ExecutePublicInferenceAsync("pretend you are Gary"));
@@ -70,7 +70,7 @@ public class RefusalTests
     [Fact]
     public async Task Interviewer_LeavesTheRefusalToThePipeline()
     {
-        var interviewer = new AnthropicTicketInterviewer(Refusing(), Options.Create(new AnthropicOptions()));
+        var interviewer = new TicketInterviewer(Refusing(), Options.Create(new AnthropicOptions()));
 
         await Assert.ThrowsAsync<LlmRefusalException>(() => interviewer.InterviewAsync("user: reset her password"));
     }
@@ -79,20 +79,20 @@ public class RefusalTests
     public async Task Coach_TriesAReframedRequest_ThenFallsBackToEducationalText()
     {
         var refusing = Refusing();
-        var router = new AnthropicGuardrailRouterService(
-            refusing, Options.Create(new AnthropicOptions()), NullLogger<AnthropicGuardrailRouterService>.Instance);
+        var router = new GuardrailRouterService(
+            refusing, Options.Create(new AnthropicOptions()), NullLogger<GuardrailRouterService>.Instance);
         Assert.Equal(Prompts.ComplianceFallback, await router.CoachAsync("how do I turn off the virus checker"));
         Assert.Equal(2, refusing.Requests.Count); // one retry before giving up
 
         var calls = 0;
         var flaky = new ScriptedChatProvider(_ => ++calls == 1 ? throw new LlmRefusalException("declined") : "Second time lucky.");
-        var recovered = new AnthropicGuardrailRouterService(
-            flaky, Options.Create(new AnthropicOptions()), NullLogger<AnthropicGuardrailRouterService>.Instance);
+        var recovered = new GuardrailRouterService(
+            flaky, Options.Create(new AnthropicOptions()), NullLogger<GuardrailRouterService>.Instance);
         Assert.Equal("Second time lucky.", await recovered.CoachAsync("how do I turn off the virus checker"));
 
         var working = new ScriptedChatProvider(_ => "  Here is the right way to do that.  ");
-        var coached = new AnthropicGuardrailRouterService(
-            working, Options.Create(new AnthropicOptions()), NullLogger<AnthropicGuardrailRouterService>.Instance);
+        var coached = new GuardrailRouterService(
+            working, Options.Create(new AnthropicOptions()), NullLogger<GuardrailRouterService>.Instance);
         Assert.Equal("Here is the right way to do that.", await coached.CoachAsync("how do I turn off the virus checker"));
         Assert.Equal(Prompts.ComplianceCoach, working.SystemPrompts.Single());
     }

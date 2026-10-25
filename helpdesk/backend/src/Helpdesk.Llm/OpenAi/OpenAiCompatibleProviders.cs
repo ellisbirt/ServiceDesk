@@ -90,7 +90,7 @@ public sealed class OpenAiCompatibleChatProvider : IChatProvider
         if (request.Tools is not null)
         {
             throw new LlmCapabilityException(
-                $"{RateLimitedSender.DisplayName(Provider)} does not support provider-native server tools; remove them or use the Anthropic provider.");
+                $"{RateLimitedSender.DisplayName(Provider)} does not support provider-native server tools; remove them or use a provider that supports them.");
         }
 
         using var activity = LlmTelemetry.StartRequest(Provider, Model);

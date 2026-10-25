@@ -40,7 +40,7 @@ public static class DependencyInjection
         if (!env.IsDevelopment() && !chatConfigured)
         {
             throw new InvalidOperationException(
-                "Anthropic:ApiKey (or an Llm:Roles:chat provider other than offline) is required outside Development.");
+                "A chat provider is required outside Development: set an Llm:Roles:chat provider other than offline, or Anthropic:ApiKey.");
         }
         if (queueProvider is null)
         {
@@ -76,9 +76,9 @@ public static class DependencyInjection
         {
             // Each request names the tier it needs; this sends it to that tier's model within the one vendor.
             services.AddScoped<IChatProvider>(sp => new TierRoutingChatProvider(sp.GetRequiredService<ILlmProviderRouter>(), ChatRole));
-            services.AddScoped<IGuardrailRouterService, AnthropicGuardrailRouterService>();
-            services.AddScoped<IPublicInferenceService, AnthropicPublicInferenceService>();
-            services.AddScoped<ITicketInterviewer, AnthropicTicketInterviewer>();
+            services.AddScoped<IGuardrailRouterService, GuardrailRouterService>();
+            services.AddScoped<IPublicInferenceService, PublicInferenceService>();
+            services.AddScoped<ITicketInterviewer, TicketInterviewer>();
         }
         else
         {

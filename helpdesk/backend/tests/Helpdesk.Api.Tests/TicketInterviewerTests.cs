@@ -43,7 +43,7 @@ public class TicketInterviewerTests
             ["stepsTried"] = tried
         }.ToJsonString();
 
-    private static AnthropicTicketInterviewer Interviewer(ScriptedClient client) =>
+    private static TicketInterviewer Interviewer(ScriptedClient client) =>
         new(client, Options.Create(new AnthropicOptions()));
 
     [Fact]

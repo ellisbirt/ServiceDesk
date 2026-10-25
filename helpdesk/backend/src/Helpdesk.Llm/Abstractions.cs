@@ -23,12 +23,12 @@ public class UpstreamRateLimitedException(TimeSpan? retryAfter, string message, 
 }
 
 /// <summary>
-/// The model declined to answer (Anthropic <c>stop_reason: refusal</c>). Any text it produced first is incomplete and
+/// The model declined to answer, as reported by the provider (Anthropic sends <c>stop_reason: refusal</c>). Any text it produced first is incomplete and
 /// must not be shown as a reply.
 /// </summary>
 public sealed class LlmRefusalException(string message) : Exception(message);
 
-/// <summary>The provider cannot honour a request feature (for example native web search on a non-Anthropic model).</summary>
+/// <summary>The provider cannot honour a request feature (for example native web search on a provider without server-side tools).</summary>
 public sealed class LlmCapabilityException(string message) : Exception(message);
 
 /// <summary>
@@ -84,7 +84,7 @@ public enum LlmCapabilities
     None = 0,
     Streaming = 1,
     StructuredOutput = 2,
-    /// <summary>Server-side tools such as Anthropic's web search.</summary>
+    /// <summary>Server-side tools run by the provider, such as native web search.</summary>
     ServerTools = 4,
     PromptCaching = 8,
     /// <summary>Can read images given with the request.</summary>

@@ -14,15 +14,15 @@ public class GuardrailRouterTests
 {
     private sealed class ScriptedClient(Func<string, string> reply) : ScriptedChatProvider(r => reply(r.SystemPrompt));
 
-    private static AnthropicGuardrailRouterService Router(IChatProvider c) =>
-        new(c, Options.Create(new AnthropicOptions()), NullLogger<AnthropicGuardrailRouterService>.Instance);
+    private static GuardrailRouterService Router(IChatProvider c) =>
+        new(c, Options.Create(new AnthropicOptions()), NullLogger<GuardrailRouterService>.Instance);
 
     [Theory]
     [InlineData("{\"lane\":\"PRIVATE_CORP\",\"reasoning\":\"x\"}", "PRIVATE_CORP")]
     [InlineData("{\"lane\":\"PUBLIC_TECH\",\"reasoning\":\"x\"}", "PUBLIC_TECH")]
     [InlineData("{\"lane\":\"NO_MATCH\",\"reasoning\":\"unrelated\"}", "NO_MATCH")]
     public void ParseLane_AcceptsValid(string raw, string expected) =>
-        Assert.Equal(expected, AnthropicGuardrailRouterService.ParseLane(raw));
+        Assert.Equal(expected, GuardrailRouterService.ParseLane(raw));
 
     [Theory]
     [InlineData("I think this is private")]
@@ -35,7 +35,7 @@ public class GuardrailRouterTests
     [InlineData("{\"lane\":\"PUBLIC_TECH\",\"reasoning\":\"x\",\"extra\":\"x\"}")]
     [InlineData("{\"lane\":\"PUBLIC_TECH\"}")]
     public void ParseLane_RejectsInvalid(string raw) =>
-        Assert.Throws<GuardrailClassificationException>(() => AnthropicGuardrailRouterService.ParseLane(raw));
+        Assert.Throws<GuardrailClassificationException>(() => GuardrailRouterService.ParseLane(raw));
 
     [Fact]
     public async Task PolicyViolation_RunsCoachPass()

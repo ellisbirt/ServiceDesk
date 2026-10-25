@@ -44,8 +44,8 @@ public class InferenceRoutingTests
 
     // ----- The classifier -----
 
-    private static AnthropicGuardrailRouterService Router(IChatProvider provider) =>
-        new(provider, Options.Create(new AnthropicOptions()), NullLogger<AnthropicGuardrailRouterService>.Instance);
+    private static GuardrailRouterService Router(IChatProvider provider) =>
+        new(provider, Options.Create(new AnthropicOptions()), NullLogger<GuardrailRouterService>.Instance);
 
     [Theory]
     [InlineData("simple", RequestComplexity.Simple)]
@@ -53,7 +53,7 @@ public class InferenceRoutingTests
     [InlineData("complex", RequestComplexity.Complex)]
     public void Classification_ReadsTheComplexity(string value, RequestComplexity expected)
     {
-        var (lane, complexity) = AnthropicGuardrailRouterService.ParseClassification(
+        var (lane, complexity) = GuardrailRouterService.ParseClassification(
             $$"""{"lane":"PUBLIC_TECH","reasoning":"x","complexity":"{{value}}"}""");
 
         Assert.Equal(ActionLanes.PublicTech, lane);
@@ -63,7 +63,7 @@ public class InferenceRoutingTests
     [Fact]
     public void Classification_WithoutAComplexity_IsStandard()
     {
-        var (_, complexity) = AnthropicGuardrailRouterService.ParseClassification("""{"lane":"PUBLIC_TECH","reasoning":"x"}""");
+        var (_, complexity) = GuardrailRouterService.ParseClassification("""{"lane":"PUBLIC_TECH","reasoning":"x"}""");
 
         Assert.Equal(RequestComplexity.Standard, complexity);
     }
@@ -73,7 +73,7 @@ public class InferenceRoutingTests
     [InlineData("""{"lane":"PUBLIC_TECH","reasoning":"x","complexity":3}""")]
     [InlineData("""{"lane":"PUBLIC_TECH","reasoning":"x","complexity":"simple","model":"opus"}""")]
     public void Classification_RejectsAnythingElse(string raw) =>
-        Assert.Throws<GuardrailClassificationException>(() => AnthropicGuardrailRouterService.ParseClassification(raw));
+        Assert.Throws<GuardrailClassificationException>(() => GuardrailRouterService.ParseClassification(raw));
 
     [Fact]
     public void ClassifierSchema_AsksForTheComplexity()
@@ -140,7 +140,7 @@ public class InferenceRoutingTests
 
         var interviewerClient = new ScriptedChatProvider(_ =>
             """{"raiseTicket":false,"userConfirmed":false,"message":"Which site?","title":"","summary":"","conversationSummary":"","recommendedAction":"","stepsTried":""}""");
-        await new AnthropicTicketInterviewer(interviewerClient, Options.Create(new AnthropicOptions())).InterviewAsync("user: I need access");
+        await new TicketInterviewer(interviewerClient, Options.Create(new AnthropicOptions())).InterviewAsync("user: I need access");
         Assert.Equal(ModelTier.Standard, interviewerClient.Requests.Single().Tier);
     }
 
@@ -148,7 +148,7 @@ public class InferenceRoutingTests
     public async Task TheInferenceService_PassesTheTierToTheModel()
     {
         var provider = new ScriptedChatProvider(_ => "answer");
-        var service = new AnthropicPublicInferenceService(
+        var service = new PublicInferenceService(
             provider, Options.Create(new AnthropicOptions()), Options.Create(new Helpdesk.Infrastructure.Search.SearchOptions()));
 
         await service.ExecutePublicInferenceAsync("q", tier: ModelTier.Fast);

@@ -35,7 +35,7 @@ Entries are grouped by theme and numbered so I can refer to them. "My call" mark
 
 ## 2. Conversational hand-off
 
-**D2.1. A model-run "ticket interviewer" replaces the follow-up form.** On the `PRIVATE_CORP` lane, each turn calls `ITicketInterviewer` with the redacted conversation. It returns structured output: either `raiseTicket: false` with the next question, or `raiseTicket: true` (a draft ticket) with a title, summary, conversation summary, recommended action and steps tried. *Why:* the form was a predefined path that fought the design I wanted (D1.2), made users re-enter what they had already said, and couldn't adapt. The user confirms the draft before anything is queued (D2.6). *Where:* `ChatPipeline.HandOffAsync`, `AnthropicTicketInterviewer`, `Prompts.TicketInterviewer`.
+**D2.1. A model-run "ticket interviewer" replaces the follow-up form.** On the `PRIVATE_CORP` lane, each turn calls `ITicketInterviewer` with the redacted conversation. It returns structured output: either `raiseTicket: false` with the next question, or `raiseTicket: true` (a draft ticket) with a title, summary, conversation summary, recommended action and steps tried. *Why:* the form was a predefined path that fought the design I wanted (D1.2), made users re-enter what they had already said, and couldn't adapt. The user confirms the draft before anything is queued (D2.6). *Where:* `ChatPipeline.HandOffAsync`, `TicketInterviewer`, `Prompts.TicketInterviewer`.
 
 **D2.2. I deleted the escalation token, the escalate endpoint and the form generator** rather than leaving them dormant. Dead paths with their own tests invite drift. The frontend `IntakeFormCard` went with them.
 
@@ -57,7 +57,7 @@ Entries are grouped by theme and numbered so I can refer to them. "My call" mark
   3. No KB articles are appended to a draft, because the confirmation prompt must be the last text.
   4. Each part of the draft is clipped so the whole fits the 4,000-character history limit.
 
-*Where:* `ChatPipeline.HandOffAsync`, `ProposalText`, `IsProposalPending`, `AnthropicTicketInterviewer`, `Prompts.TicketInterviewerConfirmTurn`, `ChatMessageResponseBubble`.
+*Where:* `ChatPipeline.HandOffAsync`, `ProposalText`, `IsProposalPending`, `TicketInterviewer`, `Prompts.TicketInterviewerConfirmTurn`, `ChatMessageResponseBubble`.
 
 ---
 
@@ -113,7 +113,7 @@ I required this workaround so users get educational advice even when the model d
 - **Embeddings:** with no embedding role, one is derived from an **OpenAI** chat vendor (`text-embedding-3-small`, 1536 dimensions, same endpoint and key). Anthropic and Grok have no embeddings API. Azure OpenAI, Ollama and LM Studio need a deployment or model name only the operator knows, so I don't guess for them.
 - **Consequence:** the knowledge base compares vectors only from the same provider and model, so AgentDesk's `embedding` role must match. AgentDesk has no equivalent derivation. In Development I configure an explicit offline embedding role, so the derivation never applies there.
 
-**D6.4. The legacy `Anthropic` section remains the chat role when no explicit role is set,** so existing deployments keep working. Class names such as `AnthropicGuardrailRouterService` are historical; they run on any vendor. Renaming them and moving the tuning options out of `Anthropic:` is a safe refactor I haven't done yet.
+**D6.4. The legacy `Anthropic` section remains the chat role when no explicit role is set,** so existing deployments keep working. The services that run on any vendor are named without a vendor (`GuardrailRouterService`, `PublicInferenceService`, `TicketInterviewer`). Only `AnthropicChatProvider` and the options that really are Anthropic's carry the name. *Still to do:* `AnthropicOptions` also holds tuning that applies to every vendor (token ceilings, temperatures, rate-limit waits, stream timeout, cost rates), and `LlmProviderOptions.AnthropicVersion` is an Anthropic-only setting in a vendor-neutral class. Moving them means a new config section with the `Anthropic:` keys as a fallback, so I haven't done it.
 
 **D6.5. Native web search needs a vendor with server-side tools,** which today means Anthropic. `/status` fails a configuration that asks for it with another vendor.
 
@@ -161,7 +161,7 @@ The capability I wanted: office documents, PDF, text, CSV, log files and images 
 
 **D8.7. Storage defaults to off outside Development.** With no `Attachments:Provider`, Development uses in-memory storage and everywhere else the feature is **off** (uploads refused, references ignored, `/status` says so), so production never holds files in memory by accident. `NullAttachmentService` implements "off".
 
-**D8.8. Limits are configurable.** *My call.* Per file 10 MB, per image 5 MB (Claude rejects larger), 5 files per message, 20 and 25 MB per conversation, token budgets for what the model reads, parsing caps, paste thresholds and retention. `/status` validates them.
+**D8.8. Limits are configurable.** *My call.* Per file 10 MB, per image 5 MB (Claude rejects larger), 5 files per message, 20 files and 25 MB per conversation, token budgets for what the model reads, parsing caps, paste thresholds and retention. `/status` validates them.
 
 **D8.9. No malware scanning, with a documented placeholder.** *My call.* `IAttachmentScanner` is the seam, and `NoOpAttachmentScanner` returns `not_scanned`. That status is stored with the file, sent on the ticket event and carried into AgentDesk, which never presents it as clean. The README says so plainly. In the meantime, files are never executed, and Office files are read as XML, never opened by Office.
 

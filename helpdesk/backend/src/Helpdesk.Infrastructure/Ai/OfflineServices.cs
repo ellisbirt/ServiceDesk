@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 namespace Helpdesk.Infrastructure.Ai;
 
 /// <summary>
-/// Offline stand-ins used only when no Anthropic API key is configured (local development).
+/// Offline stand-ins used only when no chat provider is configured (local development).
 /// The keyword router is intentionally coarse and biased towards the restrictive lanes.
 /// </summary>
 public sealed partial class OfflineGuardrailRouterService(ILogger<OfflineGuardrailRouterService> logger) : IGuardrailRouterService
@@ -35,7 +35,7 @@ public sealed partial class OfflineGuardrailRouterService(ILogger<OfflineGuardra
         string userInput, string tenantId, IReadOnlyList<ChatHistoryMessage>? conversationHistory = null,
         CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null)
     {
-        logger.LogWarning("Using OFFLINE keyword guardrail (no Anthropic API key configured).");
+        logger.LogWarning("Using OFFLINE keyword guardrail (no chat provider configured).");
 
         try
         {
@@ -91,7 +91,7 @@ public sealed class OfflinePublicInferenceService : IPublicInferenceService
         string userInput, CancellationToken cancellationToken = default, IChatProgress? progress = null, string? userAgent = null,
         IReadOnlyList<ChatHistoryMessage>? conversationHistory = null, IReadOnlyList<KbHit>? knowledgeBase = null,
         Helpdesk.Llm.ModelTier tier = Helpdesk.Llm.ModelTier.Standard, AttachmentContext? attachments = null) =>
-        ReplyAsync("_Offline mode: no Anthropic API key is configured, so this is a canned reply._\n\nSet `Anthropic:ApiKey` to get real answers."
+        ReplyAsync("_Offline mode: no chat provider is configured, so this is a canned reply._\n\nConfigure a chat provider (`Llm:Roles:chat`, or `Anthropic:ApiKey`) to get real answers."
             + KnowledgeBaseReply.Articles(knowledgeBase), progress, cancellationToken);
 
     public Task<string> ExecuteSearchInferenceAsync(

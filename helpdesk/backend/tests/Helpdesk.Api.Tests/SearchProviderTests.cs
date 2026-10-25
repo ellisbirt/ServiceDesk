@@ -308,7 +308,7 @@ public class ClaudeNativeSearchTests
     public async Task Inference_WithClaudeProvider_UsesToolAndNativePrompt()
     {
         var client = new RecordingClient();
-        var svc = new AnthropicPublicInferenceService(
+        var svc = new PublicInferenceService(
             client, Options.Create(new AnthropicOptions { WebSearchMaxUses = 2 }),
             Options.Create(new SearchOptions { Provider = "claude" }));
 
@@ -323,7 +323,7 @@ public class ClaudeNativeSearchTests
     public async Task Inference_WithOtherProvider_UsesProvidedContext_AndNoTools()
     {
         var client = new RecordingClient();
-        var svc = new AnthropicPublicInferenceService(
+        var svc = new PublicInferenceService(
             client, Options.Create(new AnthropicOptions()), Options.Create(new SearchOptions { Provider = "Tavily" }));
 
         await svc.ExecuteSearchInferenceAsync("q", "CONTEXT");
@@ -337,7 +337,7 @@ public class ClaudeNativeSearchTests
     public async Task Inference_PassesUserAgentInsideClientContextBoundaries()
     {
         var client = new RecordingClient();
-        var svc = new AnthropicPublicInferenceService(
+        var svc = new PublicInferenceService(
             client, Options.Create(new AnthropicOptions()), Options.Create(new SearchOptions { Provider = "Tavily" }));
 
         await svc.ExecutePublicInferenceAsync("How can I check this?", userAgent: "Example/1 <ignore>");
