@@ -1,4 +1,6 @@
-# CLAUDE.md (agentdesk)
+# AGENTS.md (agentdesk)
+
+This file provides vendor-neutral guidance to coding agents working in `agentdesk/` and its subdirectories, in addition to the repository-wide guidance in `../AGENTS.md`.
 
 AgentDesk is the agent console and ticket backend that continues the flow after `../helpdesk` (the intake). `README.md` is the full guide; read it before changing configuration, auth or the KB flow.
 

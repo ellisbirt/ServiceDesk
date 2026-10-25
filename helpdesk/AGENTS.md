@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md (helpdesk)
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides vendor-neutral guidance to coding agents working in `helpdesk/` and its subdirectories, in addition to the repository-wide guidance in `../AGENTS.md`.
 
 ## What this is
 

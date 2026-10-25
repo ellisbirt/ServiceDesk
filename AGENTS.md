@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides vendor-neutral guidance to coding agents working in this repository. It applies repository-wide; nested `AGENTS.md` files add directory-specific guidance and take precedence within their scope when instructions conflict.
 
 ## What this repo is
 
@@ -10,7 +10,7 @@ Development of a system prompt for an IT service-desk assistant (ticket classifi
   - `Helpdesk.Llm`: the pluggable chat and embedding providers.
   - `Helpdesk.Dlp`: redaction.
   - `Helpdesk.Shared`: the event contract and prompt-input wrapping.
-- `agentdesk/` — AgentDesk, the downstream agent console (.NET 10 API with a React UI). It stores tickets in Cosmos DB and attachments in Blob Storage, and adds the knowledge base and LLM reply assist. See `agentdesk/CLAUDE.md` and `agentdesk/README.md`.
+- `agentdesk/` — AgentDesk, the downstream agent console (.NET 10 API with a React UI). It stores tickets in Cosmos DB and attachments in Blob Storage, and adds the knowledge base and LLM reply assist. See `agentdesk/AGENTS.md` and `agentdesk/README.md`.
 
 - `evals/` — the **single source of truth** for the prompt and its tests: `system-prompt.md` (the prompt under development), `cases.json` (eval cases with stable IDs), `rubric.md` (0–10 scoring, pass = all `must` satisfied, no `must_not` hit, score ≥ 8). Language/SDK-agnostic.
 - `python-evals/` — `promptevals`, a Python package/CLI that reads `../evals/` via paths in `python-evals/evals.toml`. `python-evals/README.md` is the full user guide (case format, check types, output layout); read it before changing CLI behaviour.

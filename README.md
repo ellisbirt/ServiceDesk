@@ -35,7 +35,7 @@ New work needs to serve a line of the charter, or be recorded as an extension wi
 - To see the design and trade-offs, read [`docs/design-decisions.md`](docs/design-decisions.md).
 - To run the intake service offline (no API keys, canned replies), see [`helpdesk/README.md`](helpdesk/README.md).
 - To run the prompt evals, see [`python-evals/README.md`](python-evals/README.md). Offline checks are free, and real runs call a paid API.
-- Each part has a `CLAUDE.md` with its commands and architecture notes.
+- Coding-agent guidance lives in [`AGENTS.md`](AGENTS.md), with directory-specific commands and architecture notes in [`helpdesk/AGENTS.md`](helpdesk/AGENTS.md) and [`agentdesk/AGENTS.md`](agentdesk/AGENTS.md). These files use the vendor-neutral AGENTS.md pattern; agents that do not discover it automatically should be pointed to the applicable files.
 
 ## Status
 
