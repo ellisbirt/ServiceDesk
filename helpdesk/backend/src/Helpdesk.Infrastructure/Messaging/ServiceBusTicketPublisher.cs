@@ -32,6 +32,11 @@ public class ServiceBusOptions
 
 public sealed class ServiceBusTicketPublisher(ServiceBusSender sender) : ITicketQueuePublisher
 {
+    public async Task CheckHealthAsync(CancellationToken cancellationToken = default)
+    {
+        using var batch = await sender.CreateMessageBatchAsync(cancellationToken);
+    }
+
     public Task PublishAsync(ProcessPrivateCorpTicketEvent ticketEvent, CancellationToken cancellationToken = default)
     {
         var message = new ServiceBusMessage(JsonSerializer.Serialize(ticketEvent))

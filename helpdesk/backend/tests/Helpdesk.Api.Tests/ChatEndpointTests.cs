@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols;
@@ -24,6 +26,9 @@ public sealed class RecordingPublisher : ITicketQueuePublisher
 {
     public List<ProcessPrivateCorpTicketEvent> Sent { get; } = [];
     public Exception? Failure { get; set; }
+    public Exception? HealthFailure { get; set; }
+    public Task CheckHealthAsync(CancellationToken cancellationToken = default) =>
+        HealthFailure is null ? Task.CompletedTask : Task.FromException(HealthFailure);
     public Task PublishAsync(ProcessPrivateCorpTicketEvent ticketEvent, CancellationToken cancellationToken = default)
     {
         if (Failure is not null) throw Failure;
@@ -398,6 +403,7 @@ public class ChatEndpointTests
         Assert.DoesNotContain("hunter2", evt.SanitizedPayload);
         Assert.Equal(ProcessPrivateCorpTicketEvent.CurrentSchemaVersion, evt.SchemaVersion);
         Assert.Equal(res.Headers.GetValues("X-Correlation-ID").Single(), evt.CorrelationId);
+        Assert.True(ActivityContext.TryParse(evt.TraceParent, evt.TraceState, isRemote: true, out _));
     }
 
     [Fact]
@@ -710,13 +716,32 @@ public class ChatEndpointTests
     }
 
     [Fact]
-    public async Task ReadinessEndpoint_ReportsWhenChatProcessorIsRunning()
+    public async Task ReadinessEndpoint_ReportsWhenProcessorAndQueueAreReady()
     {
         using var f = new ApiFactory();
 
         var response = await f.CreateClient().GetAsync("/readyz");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("ready", (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task ReadinessEndpoint_FailsWhenQueueIsUnavailable_ButLivenessDoesNot()
+    {
+        using var f = new ApiFactory();
+        f.Publisher.HealthFailure = new InvalidOperationException("sensitive connection information");
+        var client = f.CreateClient();
+
+        var response = await client.GetAsync("/readyz");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("sensitive connection information", body);
+        Assert.Equal("not_ready", JsonDocument.Parse(body).RootElement.GetProperty("status").GetString());
+        var liveness = await client.GetAsync("/healthz");
+        Assert.Equal(HttpStatusCode.OK, liveness.StatusCode);
+        Assert.Equal("ok", (await liveness.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
     }
 
     [Fact]

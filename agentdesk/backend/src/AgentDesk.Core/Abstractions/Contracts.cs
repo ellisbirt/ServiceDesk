@@ -118,6 +118,7 @@ public sealed record BlobProperties(long Size, string? ContentType, string? Sha2
 
 public interface IBlobStore
 {
+    Task CheckHealthAsync(CancellationToken ct = default);
     /// <summary>A short-lived URL the client can PUT the file to (requires header <c>x-ms-blob-type: BlockBlob</c>).</summary>
     Task<Uri> GetUploadUriAsync(string path, string contentType, TimeSpan lifetime, CancellationToken ct = default);
     /// <summary>A short-lived read URL. The download is served as an attachment with the given file name.</summary>

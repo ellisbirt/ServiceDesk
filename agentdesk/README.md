@@ -10,6 +10,7 @@ It has the following parts:
 All of it runs through the shared pluggable LLM library, `Helpdesk.Llm`.
 
 ```
+
 intake (helpdesk) ──ProcessPrivateCorpTicketEvent──▶ queue ──▶ intake consumer ─┐
                                                                                  ▼
 agentdesk/frontend (agent console) ◀── REST + SignalR ──▶ AgentDesk.Api ──▶ Cosmos DB (tickets, kb, attachments)
@@ -107,7 +108,7 @@ With the intake running against the same Azurite (`npm run debug` in `../helpdes
 | `Auth:UseDevAuth`, `Auth:Enforce`, `Auth:Authority`, `Auth:Audience`, `Auth:SpaClientId`, `Auth:ApiScope`, `Auth:Anonymous:*` | See "Authentication". |
 | `Cors:AllowedOrigins`, `RateLimit:AssistPerMinute`, `RateLimit:HubTicketPerMinute` | Browser origins, and per-user limits for AI assist (default 20/min) and hub connection tickets (default 30/min). |
 | `Hub:TicketSeconds`, `Hub:MaxTicketsPerUser`, `Hub:MaxTickets` | Single-use hub connection tickets (jwt mode): lifetime in seconds (default 30), unused tickets one user may hold (10), and in total (10,000). |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `Serilog:*` | Observability. The same setup as the intake, plus the activity sources `AgentDesk.Intake`, `AgentDesk.Assist` and `Helpdesk.Llm`. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`, `OTEL_EXPORTER_OTLP_PROTOCOL`, `Serilog:*` | OTLP traces, metrics and structured logs. Signal-specific endpoints are supported; logs use gRPC by default or HTTP/protobuf when selected. |
 
 ### Production embedding setup (Azure OpenAI)
 
@@ -118,6 +119,12 @@ With the intake running against the same Azurite (`npm run debug` in `../helpdes
 } },
 "Cosmos": { "EmbeddingDimensions": 1536 }
 ```
+
+### Observability and probes
+
+Structured logs go to the console and, when configured, OTLP. OTLP logs, traces and metrics carry service, version and environment resource attributes. Traces and metrics include ASP.NET Core, outbound HTTP, runtime, LLM and application instrumentation. Set `OTEL_EXPORTER_OTLP_ENDPOINT` for a shared collector, or signal-specific endpoints when needed. Logs use gRPC by default; set `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/protobuf` for HTTP/protobuf. A signal-specific HTTP logs endpoint must include its full path. Keep content, credentials and tenant identifiers out of metric labels.
+
+`/healthz` is a liveness probe and does not check dependencies. `/readyz` checks all configured Cosmos containers, the blob container, and the configured intake worker with a five-second timeout. The storage queue worker must have completed a successful receive; Service Bus readiness only checks whether its processor is running, not that messages can be received. The blob check may create its container when configured to do so and requires permission to read container properties. These probes do not check LLM availability. Configure the telemetry backend with dashboards, alerting, retention and on-call routing; those are deployment responsibilities and are not provisioned by this repository.
 
 ## Data model
 
@@ -200,7 +207,7 @@ Errors are RFC 9457 Problem Details. Every response carries `X-Correlation-Id`.
 | AI assist | `GET /api/v1/assist` (describes the assist configuration), and `POST /tickets/{id}/assist/suggest-solutions`, `/draft-reply`, `/draft-kb`, `/reply-with-kb` and `/improve` |
 | Meta | `GET /meta/vocabulary` (statuses, priorities, categories), `GET /meta/config` (public auth settings for the SPA), `GET /me` |
 | Realtime | `POST /hub/ticket` (jwt auth mode only: a single-use connection ticket; in dev or anonymous mode the route does not exist and the hub takes the `X-Dev-*` values as query parameters), then the SignalR hub `/hubs/tickets`. Events: `ticketCreated`, `ticketUpdated`, `timelineEntryAdded`, `kbChanged`. |
-| Ops | `/healthz`, `/readyz`, `/status` (admin only: the active auth mode, storage, blobs and intake providers, and the assist role) |
+| Ops | `/healthz` (liveness), `/readyz` (storage, blob and configured intake-worker readiness), `/status` (admin only: the active auth mode, storage, blobs and intake providers, and the assist role) |
 
 ## Attachments from the helpdesk chat
 

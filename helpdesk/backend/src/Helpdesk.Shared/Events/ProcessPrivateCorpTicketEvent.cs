@@ -29,6 +29,15 @@ public record ProcessPrivateCorpTicketEvent
     [JsonPropertyName("correlationId")]
     public required string CorrelationId { get; init; }
 
+    /// <summary>Optional W3C trace context for linking asynchronous intake processing.</summary>
+    [JsonPropertyName("traceparent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TraceParent { get; init; }
+
+    [JsonPropertyName("tracestate")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TraceState { get; init; }
+
     [JsonPropertyName("sanitizedPayload")]
     public required string SanitizedPayload { get; init; }
 

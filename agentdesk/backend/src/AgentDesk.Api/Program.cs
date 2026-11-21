@@ -12,8 +12,10 @@ using AgentDesk.Infrastructure;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -99,6 +101,7 @@ services.Configure<JsonOptions>(o =>
     o.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 services.AddProblemDetails();
+services.AddHealthChecks().AddCheck<AgentDeskReadinessCheck>("dependencies", timeout: TimeSpan.FromSeconds(5));
 
 services.AddRateLimiter(o =>
 {
@@ -148,6 +151,12 @@ app.Use(async (ctx, next) =>
     }
     await next();
 });
+var spaFound = app.Environment.WebRootFileProvider.GetFileInfo("index.html").Exists;
+if (spaFound)
+{
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+}
 app.UseRouting();
 app.UseCors();
 app.UseAuthentication();
@@ -159,8 +168,18 @@ app.Use(async (ctx, next) =>
 app.UseAuthorization();
 app.UseRateLimiter();
 
-app.MapGet("/healthz", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
-app.MapGet("/readyz", () => Results.Ok(new { status = "ready" })).AllowAnonymous();
+app.MapHealthChecks("/healthz", new HealthCheckOptions
+{
+    Predicate = _ => false,
+    ResponseWriter = (ctx, _) => ctx.Response.WriteAsJsonAsync(new { status = "ok" })
+}).AllowAnonymous();
+app.MapHealthChecks("/readyz", new HealthCheckOptions
+{
+    ResponseWriter = (ctx, report) => ctx.Response.WriteAsJsonAsync(new
+    {
+        status = report.Status == HealthStatus.Healthy ? "ready" : "not_ready"
+    })
+}).AllowAnonymous();
 app.MapGet("/status", (IConfiguration cfg, AgentDesk.Infrastructure.Ai.TicketAssistService assist) => Results.Ok(new
 {
     authMode,
@@ -193,6 +212,15 @@ if (authMode == AuthModes.Jwt)
 
 app.MapDevBlobEndpoints();
 app.MapHub<TicketsHub>(TicketsHub.Path, o => o.CloseOnAuthenticationExpiration = true);
+
+if (spaFound)
+{
+    app.MapFallback("/api/{**path}", () => Results.NotFound()).AllowAnonymous();
+    app.MapFallback("/hubs/{**path}", () => Results.NotFound()).AllowAnonymous();
+    app.MapFallback("/dev-blobs/{**path}", () => Results.NotFound()).AllowAnonymous();
+    app.MapFallbackToFile("{*path:nonfile}", "index.html").AllowAnonymous();
+    app.MapFallback("{*path:file}", () => Results.NotFound()).AllowAnonymous();
+}
 
 app.Run();
 

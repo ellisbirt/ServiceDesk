@@ -13,7 +13,9 @@ using Helpdesk.Infrastructure.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -96,6 +98,7 @@ builder.Services.AddSingleton<ChatJobQueue>();
 builder.Services.AddSingleton<ChatRequestLimiter>();
 builder.Services.AddSingleton<ChatJobProcessor>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatJobProcessor>());
+builder.Services.AddHealthChecks().AddCheck<HelpdeskReadinessCheck>("dependencies", timeout: TimeSpan.FromSeconds(5));
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -169,12 +172,18 @@ app.Use(async (ctx, next) =>
 app.UseAuthorization();
 app.UseRateLimiter();
 
-app.MapGet("/healthz", () => Results.Ok(new { status = "ok" })).AllowAnonymous();
-app.MapGet("/readyz", (ChatJobProcessor processor) =>
-    processor.IsRunning
-        ? Results.Ok(new { status = "ready" })
-        : Results.StatusCode(StatusCodes.Status503ServiceUnavailable))
-    .AllowAnonymous();
+app.MapHealthChecks("/healthz", new HealthCheckOptions
+{
+    Predicate = _ => false,
+    ResponseWriter = (ctx, _) => ctx.Response.WriteAsJsonAsync(new { status = "ok" })
+}).AllowAnonymous();
+app.MapHealthChecks("/readyz", new HealthCheckOptions
+{
+    ResponseWriter = (ctx, report) => ctx.Response.WriteAsJsonAsync(new
+    {
+        status = report.Status == HealthStatus.Healthy ? "ready" : "not_ready"
+    })
+}).AllowAnonymous();
 app.MapGet("/status", (ConfigurationValidator validator) =>
 {
     var report = validator.Validate();

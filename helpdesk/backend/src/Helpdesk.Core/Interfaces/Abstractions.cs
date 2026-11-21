@@ -129,6 +129,9 @@ public interface ITicketQueuePublisher
 {
     /// <summary>Publishes a sanitised private-corp ticket event to the async processing queue.</summary>
     Task PublishAsync(ProcessPrivateCorpTicketEvent ticketEvent, CancellationToken cancellationToken = default);
+
+    /// <summary>Verifies that the configured queue transport is available without publishing a message.</summary>
+    Task CheckHealthAsync(CancellationToken cancellationToken = default);
 }
 
 public class GuardrailClassificationException(string message, Exception? inner = null) : Exception(message, inner);

@@ -303,6 +303,8 @@ public sealed class ChatPipeline(
             CorrelationId = Activity.Current?.GetTagItem("helpdesk.correlation_id")?.ToString()
                 ?? Activity.Current?.TraceId.ToString()
                 ?? Guid.NewGuid().ToString("N"),
+            TraceParent = Activity.Current is { IdFormat: ActivityIdFormat.W3C } current ? current.Id : null,
+            TraceState = Activity.Current?.TraceStateString,
             SanitizedPayload = details.ToText(),
             Subject = TicketSubject.FromText(details.Title),
             Summary = summary,
