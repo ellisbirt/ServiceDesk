@@ -1,0 +1,16 @@
+.git
+.github
+infra/
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/wwwroot
+**/.venv
+**/__pycache__
+**/.env
+**/.env.*
+**/appsettings.*.json
+**/TestResults
+**/runs
+**/runs-demo

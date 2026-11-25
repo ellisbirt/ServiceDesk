@@ -3,14 +3,17 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Net.Sockets;
 using AgentDesk.Core.Abstractions;
 using AgentDesk.Core.Domain;
 using AgentDesk.Infrastructure.Intake;
 using Helpdesk.Shared.Events;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace AgentDesk.Tests;
 
@@ -32,6 +35,126 @@ public sealed class AgentDeskFactory : WebApplicationFactory<Program>
 public class ApiTests(AgentDeskFactory factory) : IClassFixture<AgentDeskFactory>
 {
     private const string Api = "/api/v1";
+
+    [Fact]
+    public async Task HealthEndpoints_ReportLivenessAndReadiness()
+    {
+        var client = factory.CreateClient();
+
+        var liveness = await client.GetAsync("/healthz");
+        var readiness = await client.GetAsync("/readyz");
+
+        Assert.Equal(HttpStatusCode.OK, liveness.StatusCode);
+        Assert.Equal("ok", (await liveness.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
+        Assert.Equal(HttpStatusCode.OK, readiness.StatusCode);
+        Assert.Equal("ready", (await readiness.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task HostedSpaServesClientRoutesWithoutMaskingApiOrMissingFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"agentdesk-spa-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<html>AgentDesk SPA</html>");
+        try
+        {
+            using var hosted = factory.WithWebHostBuilder(builder => builder.UseWebRoot(root));
+            var client = hosted.CreateClient();
+
+            var route = await client.GetAsync("/tickets/example");
+            Assert.Equal(HttpStatusCode.OK, route.StatusCode);
+            Assert.Contains("AgentDesk SPA", await route.Content.ReadAsStringAsync());
+            Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/unknown")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/hubs/unknown")).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/dev-blobs/unknown")).StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/missing.js")).StatusCode);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ReadinessFailsWhenBlobStorageIsUnavailableWithoutExposingError()
+    {
+        using var failing = factory.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IBlobStore>();
+            services.AddSingleton<IBlobStore, UnavailableBlobStore>();
+        }));
+        var client = failing.CreateClient();
+
+        var readiness = await client.GetAsync("/readyz");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, readiness.StatusCode);
+        var body = await readiness.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("sensitive connection information", body);
+        Assert.Equal("not_ready", JsonDocument.Parse(body).RootElement.GetProperty("status").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/healthz")).StatusCode);
+    }
+
+    [Fact]
+    public async Task LogsAreExportedToSignalSpecificOtlpHttpEndpoint()
+    {
+        using var socket = new TcpListener(IPAddress.Loopback, 0);
+        socket.Start();
+        var port = ((IPEndPoint)socket.LocalEndpoint).Port;
+        socket.Stop();
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        var firstExport = new TaskCompletionSource<(string? Path, byte[] Body)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var collector = Task.Run(async () =>
+        {
+            try
+            {
+                while (listener.IsListening)
+                {
+                    var request = await listener.GetContextAsync();
+                    using var body = new MemoryStream();
+                    await request.Request.InputStream.CopyToAsync(body);
+                    firstExport.TrySetResult((request.Request.Url?.AbsolutePath, body.ToArray()));
+                    request.Response.StatusCode = 200;
+                    request.Response.Close();
+                }
+            }
+            catch (HttpListenerException) when (!listener.IsListening) { }
+            catch (ObjectDisposedException) when (!listener.IsListening) { }
+        });
+
+        try
+        {
+            using var configured = factory.WithWebHostBuilder(builder =>
+            {
+                builder.UseSetting("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", $"http://127.0.0.1:{port}/custom/logs");
+                builder.UseSetting("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf");
+            });
+            await configured.CreateClient().GetAsync("/healthz");
+            var export = await firstExport.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal("/custom/logs", export.Path);
+            Assert.NotEmpty(export.Body);
+            Assert.Contains("AgentDesk.Api", Encoding.UTF8.GetString(export.Body));
+        }
+        finally
+        {
+            listener.Stop();
+            await collector;
+        }
+    }
+
+    private sealed class UnavailableBlobStore : IBlobStore
+    {
+        public Task CheckHealthAsync(CancellationToken ct = default) =>
+            Task.FromException(new InvalidOperationException("sensitive connection information"));
+        public Task<Uri> GetUploadUriAsync(string path, string contentType, TimeSpan lifetime, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task<Uri> GetDownloadUriAsync(string path, string fileName, string contentType, TimeSpan lifetime, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task<BlobProperties?> GetPropertiesAsync(string path, bool computeSha256, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task DeleteAsync(string path, CancellationToken ct = default) => throw new NotSupportedException();
+    }
 
     private static StringContent Json(object body) =>
         new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");

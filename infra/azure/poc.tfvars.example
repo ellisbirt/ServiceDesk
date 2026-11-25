@@ -1,0 +1,29 @@
+subscription_id            = "00000000-0000-0000-0000-000000000000"
+location                   = "uksouth"
+prefix                     = "sdreplace01"
+secret_writer_principal_id = "00000000-0000-0000-0000-000000000000"
+
+# Omit applications on the first apply. After seeding Key Vault and pushing
+# both images, uncomment and replace all six values. Keep this block on later applies.
+# applications = {
+#   helpdesk = {
+#     image_digest = "sha256:<digest from ACR>"
+#     authority    = "https://<entra-authority>/v2.0"
+#     audience     = "<helpdesk-api-token-audience>"
+#   }
+#   agentdesk = {
+#     image_digest = "sha256:<digest from ACR>"
+#     authority    = "https://<entra-authority>/v2.0"
+#     audience     = "<agentdesk-api-token-audience>"
+#   }
+# }
+
+# Optional: keep the intake process warm. AgentDesk is always kept warm.
+# helpdesk_min_replicas = 1
+
+# Optional: use the first day of the current month for a new monthly budget.
+# budget = {
+#   amount     = 25
+#   start_date = "YYYY-MM-01T00:00:00Z"
+#   email      = "operator@example.com"
+# }

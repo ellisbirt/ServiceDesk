@@ -12,3 +12,12 @@ __pycache__/
 .env.local
 dist/
 test-results/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+*.tfbackend
+crash.log
+crash.*.log

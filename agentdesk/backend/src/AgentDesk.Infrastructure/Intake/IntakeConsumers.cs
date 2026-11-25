@@ -61,7 +61,9 @@ public sealed class IntakeEventProcessor(TicketService tickets, AttachmentServic
             return IntakeOutcome.Invalid;
         }
 
-        using var activity = ActivitySource.StartActivity("intake.import");
+        using var activity = ActivityContext.TryParse(evt.TraceParent, evt.TraceState, isRemote: true, out var parent)
+            ? ActivitySource.StartActivity("intake.import", ActivityKind.Consumer, parent)
+            : ActivitySource.StartActivity("intake.import", ActivityKind.Consumer);
         activity?.SetTag("agentdesk.tenant", evt.TenantId);
         activity?.SetTag("agentdesk.event_id", evt.EventId);
         using var scope = logger.BeginScope(new Dictionary<string, object>
@@ -115,6 +117,9 @@ public sealed class StorageQueueIntakeConsumer(
     IOptions<IntakeOptions> options,
     ILogger<StorageQueueIntakeConsumer> logger) : BackgroundService
 {
+    private int ready;
+    public bool IsReady => Volatile.Read(ref ready) == 1 && ExecuteTask is { IsCompleted: false };
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var o = options.Value;
@@ -141,6 +146,7 @@ public sealed class StorageQueueIntakeConsumer(
             {
                 QueueMessage[] messages = await queue.ReceiveMessagesAsync(Math.Clamp(o.BatchSize, 1, 32),
                     TimeSpan.FromSeconds(o.VisibilityTimeoutSeconds), stoppingToken);
+                Volatile.Write(ref ready, 1);
                 foreach (var message in messages)
                 {
                     await HandleAsync(queue, poison, message, o, stoppingToken);
@@ -153,6 +159,7 @@ public sealed class StorageQueueIntakeConsumer(
             }
             catch (Exception ex)
             {
+                Volatile.Write(ref ready, 0);
                 logger.LogWarning(ex, "Intake queue receive failed");
             }
             if (handled == 0) await Task.Delay(TimeSpan.FromSeconds(Math.Max(1, o.PollIntervalSeconds)), stoppingToken);
@@ -203,6 +210,7 @@ public sealed class ServiceBusIntakeConsumer(
 {
     private ServiceBusClient? client;
     private ServiceBusProcessor? processor;
+    public bool IsReady => ExecuteTask is { IsCompleted: false } && processor?.IsProcessing == true;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

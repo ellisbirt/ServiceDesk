@@ -59,6 +59,12 @@ public sealed class AzureBlobStore : IBlobStore
         createContainer = o.CreateContainerIfNotExists;
     }
 
+    public async Task CheckHealthAsync(CancellationToken ct = default)
+    {
+        await EnsureContainerAsync(ct);
+        _ = await container.GetPropertiesAsync(cancellationToken: ct);
+    }
+
     public async Task<Uri> GetUploadUriAsync(string path, string contentType, TimeSpan lifetime, CancellationToken ct = default)
     {
         await EnsureContainerAsync(ct);
@@ -166,6 +172,8 @@ public sealed class InMemoryBlobStore(IOptions<BlobStorageOptions> options, IClo
     private readonly byte[] signingKey = RandomNumberGenerator.GetBytes(32);
 
     public sealed record StoredBlob(byte[] Content, string ContentType);
+
+    public Task CheckHealthAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     public Task<Uri> GetUploadUriAsync(string path, string contentType, TimeSpan lifetime, CancellationToken ct = default) =>
         Task.FromResult(BuildUri(path, "w", lifetime, null));

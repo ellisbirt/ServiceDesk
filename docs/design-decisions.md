@@ -243,6 +243,12 @@ The capability I wanted: office documents, PDF, text, CSV, log files and images 
 
 **D10.6. Line endings.** The repository has `core.autocrlf` on, so working copies are CRLF and the index is LF. The "LF will be replaced by CRLF" warnings from git are noise.
 
+**D10.7. OTLP export and explicit probe semantics.** Both APIs emit structured console logs and can export logs, traces and metrics to an OTLP collector; W3C trace context is carried on ticket events to link the consumer span. Liveness stays dependency-free, while readiness checks the chat processor and queue on Helpdesk, and selected Cosmos containers, blobs and intake worker on AgentDesk. Service Bus probes indicate sender or processor state, not guaranteed connectivity. Health probes are excluded from request traces; the ASP.NET Core metrics instrumentation still counts probes under their fixed low-cardinality routes. *Why:* log centralization and readiness are prerequisites for operating a deployment, while keeping liveness independent avoids restarting a healthy process during a dependency outage. *Cost:* readiness depends on the selected provider's probe permissions and can mark the instance unavailable when that dependency cannot be reached. Dashboards, SLO thresholds, alerting, retention and on-call procedures remain deployment responsibilities.
+
+**D10.8. Single-image application packaging for an Azure proof of concept.** Each API image includes its own built SPA and runs as the non-root .NET container user. This avoids separate frontend hosts and lets the existing same-origin API and SignalR paths work. AgentDesk serves static files and client-side routes, but unknown API and hub routes do not fall through to the SPA. *Cost:* Entra browser settings are compiled into the image; changing them requires rebuilding. This does not provision Azure resources, remove single-instance constraints, or make the applications production-ready.
+
+**D10.9. Low-cost, persistent Azure PoC.** `infra/azure` uses Container Apps Consumption, one shared LRS storage account, and single-region serverless Cosmos DB. AgentDesk keeps a replica for queue intake; Helpdesk can scale to zero. Both use managed identities, and Helpdesk references secrets pre-seeded in Key Vault. Deploy infrastructure before pushing images and enabling the app resources; keep Terraform state in a separate account. Log Analytics collects console/system logs without adding an OTLP collector. This trades away high availability and full telemetry for a lower baseline cost. See [the deployment guide](azure-poc.md).
+
 ---
 
 ## 11. Known gaps and rejected alternatives
@@ -266,6 +272,8 @@ The capability I wanted: office documents, PDF, text, CSV, log files and images 
 **D11.9. Rejected: copying files into AgentDesk on ticket creation.** A shared container avoids the copy and its failure modes (D8.5).
 
 **D11.10. Not built.** Server-side conversion of oversized text from API clients into attachments; OCR and redaction of images; legacy Office formats; a real malware scanner; a signed lane marker in history; per-tenant cost controls; renaming the vendor-neutral classes that still say "Anthropic".
+
+**D11.11. Observability backend operations are only partially provisioned.** The Azure PoC collects console and system logs with a retention policy. A full OTLP traces/metrics pipeline, dashboards, service alerts, SLOs and on-call procedures are not provisioned.
 
 ---
 

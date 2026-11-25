@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using AgentDesk.Core.Abstractions;
@@ -58,6 +59,30 @@ public class IntakeAttachmentTests(AgentDeskFactory factory) : IClassFixture<Age
         var ticket = (await tickets.GetAsync(Tenant, TicketService.DeterministicId(Tenant, evt.EventId.ToString("D"))))!;
         var attachments = await scope.ServiceProvider.GetRequiredService<IAttachmentRepository>().ListForTicketAsync(Tenant, ticket.Id);
         return (ticket, attachments);
+    }
+
+    [Fact]
+    public async Task IntakeSpanUsesEventTraceContext()
+    {
+        const string traceParent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
+        Activity? observed = null;
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "AgentDesk.Intake",
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (activity.ParentSpanId.ToString() == "0123456789abcdef") observed = activity;
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        await ProcessAsync(Event() with { TraceParent = traceParent, TraceState = "vendor=value" });
+
+        Assert.NotNull(observed);
+        Assert.Equal("0123456789abcdef0123456789abcdef", observed.TraceId.ToString());
+        Assert.Equal(ActivityKind.Consumer, observed.Kind);
+        Assert.Equal("vendor=value", observed.TraceStateString);
     }
 
     [Fact]

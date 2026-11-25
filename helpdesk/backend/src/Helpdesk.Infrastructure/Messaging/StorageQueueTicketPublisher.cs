@@ -31,6 +31,12 @@ public sealed class StorageQueueTicketPublisher(QueueClient queue) : ITicketQueu
         await queue.SendMessageAsync(JsonSerializer.Serialize(ticketEvent), cancellationToken);
     }
 
+    public async Task CheckHealthAsync(CancellationToken cancellationToken = default)
+    {
+        await EnsureQueueAsync(cancellationToken);
+        await queue.GetPropertiesAsync(cancellationToken);
+    }
+
     private async Task EnsureQueueAsync(CancellationToken ct)
     {
         if (_queueEnsured) return;
